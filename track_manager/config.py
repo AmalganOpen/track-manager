@@ -118,13 +118,13 @@ class Config:
     @property
     def output_dir(self) -> Path:
         """Get output directory path."""
-        return Path(self.get("output_dir", "~/Documents/projects/DJ/tracks"))
+        return Path(self.get("output_dir", "~/Music/tm/tracks"))
 
     @property
     def failed_log(self) -> Path:
         """Get failed downloads log path."""
         return Path(
-            self.get("failed_log", "~/Documents/projects/DJ/failed-downloads.txt")
+            self.get("failed_log", "~/Music/tm/failed-downloads.txt")
         )
 
     @property
@@ -132,7 +132,7 @@ class Config:
         """Get metadata review CSV path."""
         return Path(
             self.get(
-                "metadata_csv", "~/Documents/projects/DJ/tracks-metadata-review.csv"
+                "metadata_csv", "~/Music/tm/tracks-metadata-review.csv"
             )
         )
 

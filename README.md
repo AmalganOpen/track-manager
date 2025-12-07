@@ -2,7 +2,7 @@
 
 Universal music downloader with smart duplicate detection and metadata management.
 
-Download tracks from **Spotify, YouTube, SoundCloud, or direct URLs** with automatic source detection, duplicate prevention, and professional metadata handling.
+Download tracks from **Spotify, YouTube, SoundCloud, or direct URLs** with automatic source detection, duplicate prevention, and metadata handling.
 
 ## Features
 
@@ -17,7 +17,7 @@ Download tracks from **Spotify, YouTube, SoundCloud, or direct URLs** with autom
 
 ## Installation
 
-### Using pipx (Recommended)
+### Using pipx (NOT IMPLEMENTED)
 
 ```bash
 # Install pipx if not available
@@ -40,6 +40,8 @@ cd track-manager
 
 # Install the package
 pip install -e .
+#or
+pip3 install -e .
 ```
 
 ### Using pip
@@ -112,15 +114,19 @@ spotdl:
 ```bash
 # Download from Spotify
 track-manager download "https://open.spotify.com/track/..."
+tm "https://open.spotify.com/track/..."
 
 # Download from YouTube
 track-manager download "https://www.youtube.com/watch?v=..."
+tm "https://www.youtube.com/watch?v=..."
 
 # Download from SoundCloud
 track-manager download "https://soundcloud.com/artist/track"
+tm "https://soundcloud.com/artist/track"
 
 # Download from direct URL
 track-manager download "https://example.com/audio.mp3"
+tm "https://example.com/audio.mp3"
 ```
 
 ### Manage Your Library

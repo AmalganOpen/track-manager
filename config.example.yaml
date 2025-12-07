@@ -2,13 +2,13 @@
 # Copy this to config.yaml and customize for your setup
 
 # Output directory for downloaded tracks
-output_dir: "~/Documents/projects/DJ/tracks"
+output_dir: "~/Music/tm/tracks"
 
 # Failed downloads log file
-failed_log: "~/Documents/projects/DJ/failed-downloads.txt"
+failed_log: "~/Music/tm/failed-downloads.txt"
 
 # Metadata review CSV file
-metadata_csv: "~/Documents/projects/DJ/tracks-metadata-review.csv"
+metadata_csv: "~/Music/tm/tracks-metadata-review.csv"
 
 # Spotdl configuration (for Spotify downloads)
 spotdl:
@@ -17,7 +17,7 @@ spotdl:
   # Or set them here (but keep config.yaml out of version control!)
   client_id: ""
   client_secret: ""
-  
+
   # Path to spotdl executable (leave empty to use 'spotdl' from PATH)
   path: ""
   # Alternative: Use a specific Python environment
@@ -28,7 +28,7 @@ downloads:
   # Default format: auto (prefer m4a), m4a, or mp3
   # Note: Quality is always best available (320kbps for MP3, 256kbps for M4A/AAC)
   default_format: "auto"
-  
+
   # Playlist confirmation threshold (ask before downloading large playlists)
   playlist_confirmation_threshold: 50
 

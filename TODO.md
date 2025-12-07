@@ -22,17 +22,11 @@
 
 ### High Priority
 
-- [x] **Quality fixed** - Always download best quality (320kbps MP3, 256kbps M4A)
-  - Removed config option - quality is always best by default
-  - Spotify: 320kbps for MP3, 256kbps for M4A/AAC
-  - YouTube: Explicitly requests format 251 (Opus ~160kbps) or 140 (M4A ~128kbps)
-    - Fixed: Was defaulting to format 249 (~50kbps)
-  - SoundCloud: Best available quality (inherits YouTube settings)
-  - No user configuration needed
-- [ ] **Test with real URLs** - Validate all source handlers work correctly at best quality
+- [x] **Quality fixed** - Always download best quality
+- [x] **Test with real URLs** - Validate all source handlers work correctly at best quality
   - Spotify tracks, playlists, and albums (verify 320kbps)
   - YouTube videos and playlists
-  - SoundCloud tracks and sets
+    -SoundCloud tracks and sets
   - Direct audio URLs (MP3, M4A, etc.)
 - [ ] **Improve Spotify credential setup UX** - Make it easier for new users
   - Add first-run detection (check for credentials on startup)
@@ -41,10 +35,6 @@
   - Document the process clearly in README
   - Consider: Can we work without credentials? (Spotify API requires them)
 - [ ] **Integration tests** - Add tests for complete workflows
-- [ ] **Publish to PyPI** - Make it `pip install track-manager`
-  - See [PUBLISH_CHECKLIST.md](./PUBLISH_CHECKLIST.md) for detailed steps
-  - Suggested version: 0.2.0 (quality improvements)
-  - Must complete testing and documentation first
 
 ### Medium Priority
 
@@ -53,7 +43,7 @@
 - [ ] **Batch operations** - Process multiple URLs from file
 - [ ] **Config validation** - Validate config.yaml on load
 
-### Low Priority / Future
+### Low Priority / Future / Speculative
 
 - [ ] **Additional sources** - Bandcamp, Apple Music, Tidal
 - [ ] **Playlist organization** - Group downloads by playlist/album
@@ -77,16 +67,6 @@ twine check dist/*
 # Upload to PyPI (requires account and API token)
 python -m twine upload dist/*
 ```
-
-Before publishing, ensure:
-
-- [ ] All tests pass
-- [ ] Real-world testing complete
-- [ ] Documentation is accurate
-- [ ] Version number updated in pyproject.toml
-- [ ] PyPI account and API token configured
-
-## Testing Checklist
 
 ### Functional Tests
 
