@@ -60,8 +60,10 @@ class SpotifyDownloader(BaseDownloader):
 
         downloader_settings = DownloaderOptions()
         downloader_settings["output"] = str(output_dir)
-        # Always use best quality (320k for MP3, 256k for M4A/AAC)
-        downloader_settings["bitrate"] = "320k"
+        # Use VBR matching source quality (consistent with YouTube handler)
+        # spotdl downloads from YouTube, which can provide ~128-160kbps
+        # Let it preserve the source quality without fixed bitrate limit
+        downloader_settings["bitrate"] = "0"
 
         self.spotdl = Spotdl(
             client_id=client_id,

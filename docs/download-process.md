@@ -258,22 +258,23 @@ We use `preferredquality: "0"` which tells FFmpeg to use VBR matching source qua
 **Audio Quality Strategy:**
 
 - **Underlying Source:** YouTube (via spotdl)
-- **Source Quality:** ~130kbps (YouTube maximum)
-- **Target Bitrate:** 128kbps
+- **Source Quality:** ~128-160kbps (YouTube formats 140/251)
+- **Target Bitrate:** VBR matching source
 
-**Why 128kbps?**
+**Quality Preservation:**
 spotdl downloads audio from YouTube (using Spotify metadata):
 
 - Spotify provides metadata (artist, title, album, cover art)
-- YouTube provides the actual audio stream (~130kbps)
-- Setting higher bitrate would unnecessarily upscale the audio
+- YouTube provides the actual audio stream (~128-160kbps)
+- VBR setting preserves source quality (consistent with YouTube handler)
+- Can get ~160kbps when YouTube format 251 available
 
 **Configuration:**
 
 ```python
 downloader_settings = DownloaderOptions()
 downloader_settings["output"] = str(output_dir)
-downloader_settings["bitrate"] = "128k"  # Match YouTube quality
+downloader_settings["bitrate"] = "0"  # VBR matching source quality
 ```
 
 **Processing Flow:**
@@ -535,7 +536,7 @@ track-manager check-quality [--detailed]
 | Source                | Expected Bitrate     | Format  | Notes                            |
 | --------------------- | -------------------- | ------- | -------------------------------- |
 | YouTube               | ~128-160 kbps (VBR)  | M4A/MP3 | Format 140: ~128kbps, Format 251: ~160kbps |
-| Spotify (via YouTube) | ~128-130 kbps        | M4A/MP3 | YouTube source (fixed 128kbps)   |
+| Spotify (via YouTube) | ~128-160 kbps (VBR)  | M4A/MP3 | YouTube source with VBR          |
 | SoundCloud            | ~128 kbps            | M4A/MP3 | Free tier (Go+ not implemented)  |
 | Direct URL            | Varies               | As-is   | No modification                  |
 
@@ -1142,7 +1143,7 @@ track-manager check-quality --detailed
 **Expected Results:**
 
 - YouTube: ~128-160 kbps (VBR, depends on format) ✓
-- Spotify: ~128-130 kbps ✓
+- Spotify: ~128-160 kbps (VBR, via YouTube) ✓
 - SoundCloud: ~128 kbps ✓
 - Files <128 kbps: Investigate source
 
@@ -1201,9 +1202,9 @@ The track-manager system is designed to **preserve audio quality without unneces
 
 **Spotify (via YouTube):**
 
-- Source: ~130 kbps (YouTube)
-- Target: 128 kbps
-- Result: Matches actual source quality
+- Source: ~128-160 kbps (YouTube formats 140/251)
+- Target: VBR matching source (bitrate: "0")
+- Result: Preserves YouTube source quality (consistent with YouTube handler)
 
 **SoundCloud:**
 
@@ -1225,7 +1226,7 @@ The track-manager system is designed to **preserve audio quality without unneces
 
 - Match target bitrate to source quality
 - YouTube: VBR ~128-160 kbps (preserves format 140/251 quality)
-- Spotify: 128 kbps (matches YouTube source)
+- Spotify: VBR ~128-160 kbps (preserves YouTube source quality)
 - SoundCloud: 128 kbps (matches free tier)
 - No misleading file sizes
 - Honest quality representation
@@ -1329,7 +1330,7 @@ track-manager check-quality
 **Current State (2025):**
 
 - YouTube: Format 140 ~128kbps, Format 251 ~160kbps (stable for years)
-- Spotify: Uses YouTube (via spotdl), fixed 128kbps target
+- Spotify: Uses YouTube (via spotdl) with VBR matching source quality
 - SoundCloud: ~128 kbps free tier (Go+ credentials not implemented)
 - These formats and quality levels are stable and unlikely to change significantly
 
