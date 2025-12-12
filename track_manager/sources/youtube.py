@@ -26,7 +26,7 @@ class YouTubeDownloader(BaseDownloader):
             format: Output format (auto, m4a, mp3)
         """
         # Determine output format
-        if format == "auto":
+        if format == "auto": 
             audio_format = "m4a"
         else:
             audio_format = format
@@ -41,7 +41,7 @@ class YouTubeDownloader(BaseDownloader):
                 {
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": audio_format,
-                    "preferredquality": "192",  # High enough for 20kHz, avoids excessive upsampling
+                    "preferredquality": "192",  # CBR 192kbps - see docs/track-quality.md
                 }
             ],
             "outtmpl": str(self.output_dir / ".tmp_%(id)s.%(ext)s"),

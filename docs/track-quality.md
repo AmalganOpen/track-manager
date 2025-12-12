@@ -175,6 +175,38 @@ In FFmpeg's VBR quality scale:
 
 **The ~192kbps is the sweet spot** for preserving format 251's quality without waste.
 
+### Why Not Use VBR Like Spotify?
+
+**We tested VBR quality scale (0-10):**
+- Quality 0: 400+ kbps (excessive upsampling)
+- Quality 2: ~300 kbps (still too high)
+- Quality 5: ~300 kbps (unexpectedly high)
+
+**VBR doesn't work well for YouTube:**
+- FFmpeg's VBR scale aims for "transparency" in Opus→AAC conversion
+- This requires 250-300+ kbps AAC to preserve 160kbps Opus quality
+- While technically correct, it appears inflated to users
+- File sizes don't match perceived quality
+
+**Spotify's bitrate="0" works differently:**
+- spotdl interprets it as "intelligent source matching"
+- Results: 166-191kbps VBR (adaptive, efficient)
+- More conservative than yt-dlp's direct VBR
+- Better balance of quality and size
+
+**Why we use 192kbps CBR for YouTube:**
+- ✅ Predictable output size (~1.4 MB/min)
+- ✅ Proven to preserve 20kHz frequency range
+- ✅ Reasonable overhead (~20% over source)
+- ✅ Avoids VBR's excessive bitrates (300+ kbps)
+- ✅ More honest than claiming "VBR transparency"
+
+**Trade-off accepted:**
+- YouTube: 192kbps CBR (consistent, predictable)
+- Spotify: ~166-191kbps VBR (adaptive, efficient)
+- Both preserve 20kHz and sound excellent
+- Slight difference is acceptable for usability
+
 ## Spotify: Why `bitrate="0"` Works Differently
 
 ### The Spotify Exception
