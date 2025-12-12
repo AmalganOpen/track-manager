@@ -52,6 +52,138 @@ def detect_source(url: str) -> str:
         return "direct"  # Assume direct audio file
 ```
 
+## Format Selection
+
+### Output Format: M4A vs MP3
+
+The output format is controlled by the `--format` flag:
+
+```bash
+# Default: M4A
+track-manager download <url>
+
+# Explicit M4A
+track-manager download <url> --format m4a
+
+# MP3
+track-manager download <url> --format mp3
+```
+
+**Default is M4A because:**
+- Smaller file size at same quality
+- YouTube's format 140 is native M4A (no conversion)
+- Modern format with better compression
+- Supported by all modern devices and software
+
+**Choose MP3 if:**
+- Compatibility with older devices required
+- Specific DJ software requires MP3
+- Personal preference
+
+### YouTube Format Preference Order
+
+When downloading from YouTube, yt-dlp tries formats in this order:
+
+```python
+"format": "251/140/bestaudio/best"
+```
+
+**1. Format 251 (Preferred)**
+- Codec: Opus
+- Bitrate: ~160kbps VBR
+- Quality: Best available
+- Requires: Transcoding Opus → AAC (M4A) or MP3
+- Why preferred: Highest quality (~25% better than 140)
+
+**2. Format 140 (Fallback)**
+- Codec: AAC (M4A)
+- Bitrate: ~128kbps
+- Quality: Standard
+- Requires: No conversion for M4A (extract only)
+- When used: Format 251 not available (rare)
+
+**3. bestaudio (Fallback)**
+- Selects best available audio format
+- May be format 250 (Opus 70kbps), 249 (Opus 50kbps), or others
+- Rarely needed (251/140 almost always available)
+
+**4. best (Last Resort)**
+- Best quality overall (may include video)
+- Audio extracted from video+audio stream
+- Rarely used in practice
+
+### What Determines Final Format?
+
+**Flowchart:**
+
+YouTube Download
+     ↓
+User specifies format? --format {auto|m4a|mp3}
+     ↓
+┌────────────────┬─────────────┬──────────────┐
+│   auto/m4a     │     mp3     │              │
+└────────────────┴─────────────┴──────────────┘
+     ↓                  ↓
+Try format 251    Try format 251
+(Opus ~160kbps)   (Opus ~160kbps)
+     ↓                  ↓
+Available?        Available?
+     │                  │
+     ├─Yes──→ Convert   ├─Yes──→ Convert
+     │        Opus→M4A   │        Opus→MP3
+     │        VBR ~160   │        VBR ~160
+     │                   │
+     ├─No───→ Try 140    ├─No───→ Try 140
+     │        (M4A 128)  │        (M4A 128)
+     │                   │
+     ├─Yes──→ Extract    ├─Yes──→ Convert
+     │        as M4A     │        M4A→MP3
+     │        ~128kbps   │        ~128kbps
+     │                   │
+     ├─No───→ Try        ├─No───→ Try
+     │        bestaudio  │        bestaudio
+     │                   │
+     └────→ Final M4A    └────→ Final MP3
+
+### Quality Implications
+
+**M4A Output:**
+- Format 251 → M4A: ~160kbps VBR (best quality)
+- Format 140 → M4A: ~128kbps (extract, no loss)
+
+**MP3 Output:**
+- Format 251 → MP3: ~160kbps VBR (transcode from Opus)
+- Format 140 → MP3: ~128kbps (transcode from M4A)
+- Note: MP3 files are larger than M4A at same quality
+
+**Transcoding Quality Loss:**
+- Opus → AAC (M4A): Minimal loss (both modern codecs)
+- Opus → MP3: Slightly more loss (MP3 is older codec)
+- M4A → MP3: Some loss (lossy → lossy conversion)
+
+**Recommendation:**
+- Use M4A (default) unless you specifically need MP3
+- M4A preserves quality better and creates smaller files
+
+### Examples
+
+**Best quality (default):**
+```bash
+track-manager download "https://youtube.com/watch?v=..."
+# Result: M4A ~160kbps (if format 251 available)
+```
+
+**Compatibility mode:**
+```bash
+track-manager download "https://youtube.com/watch?v=..." --format mp3
+# Result: MP3 ~160kbps (if format 251 available)
+```
+
+**Rare case (format 251 unavailable):**
+```bash
+track-manager download "https://youtube.com/watch?v=old_video"
+# Result: M4A ~128kbps (falls back to format 140)
+```
 ## Handler-Specific Processing
 
 ### 1. YouTube Handler (`sources/youtube.py`)
