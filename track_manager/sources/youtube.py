@@ -34,19 +34,22 @@ class YouTubeDownloader(BaseDownloader):
         # Configure yt-dlp options
         ydl_opts = {
             # Prefer high-quality audio formats
-            # 251: Opus ~160kbps (best), 140: M4A ~128kbps, then fallback
-            "format": "251/140/bestaudio*[acodec=opus]/bestaudio/best",
+            # 140: M4A ~130kbps (native, no conversion needed)
+            # 251: Opus ~129kbps (requires conversion to M4A)
+            "format": "140/251/bestaudio/best",
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": audio_format,
-                    "preferredquality": "0",  # Best quality
+                    "preferredquality": "0",  # Use VBR matching source quality
                 }
             ],
             "outtmpl": str(self.output_dir / ".tmp_%(id)s.%(ext)s"),
             "quiet": False,
             "no_warnings": False,
             "extract_flat": False,
+            # Enable remote components for solving JS challenges to access high-quality formats
+            "remote_components": ["ejs:github"],
         }
 
         # Check if it's a playlist

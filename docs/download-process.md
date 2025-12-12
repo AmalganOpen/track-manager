@@ -62,12 +62,17 @@ def detect_source(url: str) -> str:
 - **Target Format:** M4A (auto) or MP3 (explicit)
 - **Target Bitrate:** 128kbps
 
-**Why 128kbps?**
-YouTube streams audio at approximately 130kbps maximum. Setting a higher bitrate would:
+**Quality Preservation Strategy:**
 
-- Upscale the audio (130kbps → 320kbps = 2.5x)
-- Create larger files without quality improvement
-- Mislead users about actual audio quality
+YouTube offers different audio formats with varying bitrates:
+- Format 140 (M4A): ~128kbps - Extracted without re-encoding (lossless)
+- Format 251 (Opus): ~160kbps - Converted to M4A using VBR at source quality
+
+We use `preferredquality: "0"` which tells FFmpeg to use VBR matching source quality:
+- Preserves format 140 at ~128kbps (extraction, no loss)
+- Preserves format 251 at ~160kbps (conversion with minimal loss)
+- No unnecessary upsampling or downsampling
+- Files reflect actual source quality
 
 **Format Selection:**
 
@@ -85,7 +90,7 @@ YouTube streams audio at approximately 130kbps maximum. Setting a higher bitrate
 "postprocessors": [{
     "key": "FFmpegExtractAudio",
     "preferredcodec": "m4a",  # or "mp3"
-    "preferredquality": "128"  # Match YouTube's max quality
+    "preferredquality": "0"  # Use VBR matching source quality
 }]
 ```
 
@@ -94,9 +99,9 @@ YouTube streams audio at approximately 130kbps maximum. Setting a higher bitrate
 1. Check if URL is playlist (ask for confirmation if >5 videos)
 2. Download with yt-dlp using format preference
 3. FFmpeg extracts/converts audio:
-   - If format 140 (M4A): Extract without re-encoding
-   - If format 251 (Opus): Convert to M4A at 128kbps
-   - If MP3 requested: Convert to MP3 at 128kbps
+   - If format 140 (M4A ~128kbps): Extract without re-encoding (lossless)
+   - If format 251 (Opus ~160kbps): Convert to M4A using VBR (~160kbps)
+   - If MP3 requested: Convert to MP3 using VBR
 4. Extract metadata from file
 5. Check for duplicates in library
 6. Flag for review if metadata is missing/dirty
@@ -389,12 +394,12 @@ track-manager check-quality [--detailed]
 
 ### Expected Bitrates by Source
 
-| Source                | Expected Bitrate | Format  | Notes                            |
-| --------------------- | ---------------- | ------- | -------------------------------- |
-| YouTube               | ~128-130 kbps    | M4A/MP3 | Native max quality               |
-| Spotify (via YouTube) | ~128-130 kbps    | M4A/MP3 | YouTube source                   |
-| SoundCloud            | ~128 kbps        | M4A/MP3 | Free tier (Go+ not implemented)  |
-| Direct URL            | Varies           | As-is   | No modification                  |
+| Source                | Expected Bitrate     | Format  | Notes                            |
+| --------------------- | -------------------- | ------- | -------------------------------- |
+| YouTube               | ~128-160 kbps (VBR)  | M4A/MP3 | Format 140: ~128kbps, Format 251: ~160kbps |
+| Spotify (via YouTube) | ~128-130 kbps        | M4A/MP3 | YouTube source (fixed 128kbps)   |
+| SoundCloud            | ~128 kbps            | M4A/MP3 | Free tier (Go+ not implemented)  |
+| Direct URL            | Varies               | As-is   | No modification                  |
 
 ### Quality Verification Example
 
@@ -409,8 +414,8 @@ $ track-manager check-quality
 M4A - 120 files
 ============================================================
   Bitrate:
-    Average: 129 kbps
-    Range: 128 kbps - 130 kbps
+    Average: 145 kbps
+    Range: 128 kbps - 160 kbps
   Sample Rate: 44.1 kHz
   Quality Distribution:
     Medium (128-256 kbps): 120 files
@@ -998,7 +1003,8 @@ track-manager check-quality --detailed
 
 **Expected Results:**
 
-- YouTube/Spotify: ~128-130 kbps ✓
+- YouTube: ~128-160 kbps (VBR, depends on format) ✓
+- Spotify: ~128-130 kbps ✓
 - SoundCloud: ~128 kbps ✓
 - Files <128 kbps: Investigate source
 
@@ -1051,9 +1057,9 @@ The track-manager system is designed to **preserve audio quality without unneces
 
 **YouTube (Format 140/251):**
 
-- Source: ~130 kbps maximum
-- Target: 128 kbps
-- Result: No unnecessary upsampling
+- Source: Format 140 ~128kbps, Format 251 ~160kbps
+- Target: VBR matching source (preferredquality: "0")
+- Result: Preserves actual source quality, no upsampling or downsampling
 
 **Spotify (via YouTube):**
 
@@ -1080,7 +1086,8 @@ The track-manager system is designed to **preserve audio quality without unneces
 **Our Approach:**
 
 - Match target bitrate to source quality
-- YouTube/Spotify: 128 kbps (matches ~130 kbps source)
+- YouTube: VBR ~128-160 kbps (preserves format 140/251 quality)
+- Spotify: 128 kbps (matches YouTube source)
 - SoundCloud: 128 kbps (matches free tier)
 - No misleading file sizes
 - Honest quality representation
@@ -1167,9 +1174,10 @@ Users can always verify the approach is working:
 track-manager check-quality
 
 # Expected results:
-# - YouTube/Spotify files: ~128-130 kbps
-# - SoundCloud files: ~128-256 kbps
-# - No files unnecessarily >130 kbps from YouTube
+# - YouTube files: ~128-160 kbps (VBR, depends on format)
+# - Spotify files: ~128-130 kbps
+# - SoundCloud files: ~128 kbps
+# - No unnecessary upsampling
 ```
 
 ### Future Considerations
@@ -1182,10 +1190,10 @@ track-manager check-quality
 
 **Current State (2025):**
 
-- YouTube: ~130 kbps maximum (stable for years)
-- Spotify: Uses YouTube (via spotdl)
+- YouTube: Format 140 ~128kbps, Format 251 ~160kbps (stable for years)
+- Spotify: Uses YouTube (via spotdl), fixed 128kbps target
 - SoundCloud: ~128 kbps free tier (Go+ credentials not implemented)
-- These limits are unlikely to change significantly
+- These formats and quality levels are stable and unlikely to change significantly
 
 ---
 
