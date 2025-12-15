@@ -156,3 +156,18 @@ class Config:
     def duplicate_handling(self) -> str:
         """Get duplicate handling mode."""
         return self.get("duplicates.handling", "interactive")
+
+    @property
+    def dabmusic_email(self) -> Optional[str]:
+        """Get DAB Music email."""
+        return self.get("dabmusic.email")
+
+    @property
+    def dabmusic_password(self) -> Optional[str]:
+        """Get DAB Music password."""
+        return self.get("dabmusic.password")
+
+    @property
+    def dabmusic_endpoint(self) -> str:
+        """Get DAB Music endpoint."""
+        return self.get("dabmusic.endpoint", "https://dabmusic.xyz")
