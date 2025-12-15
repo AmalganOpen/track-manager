@@ -85,7 +85,7 @@ class DABMusicClient:
             return None
 
         except requests.RequestException as e:
-            print(f"⚠️  DAB Music search failed: {e}", file=sys.stderr)
+            print(f"⚠️ DAB Music search failed: {e}", file=sys.stderr)
             return None
 
     def download_track(

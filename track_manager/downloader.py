@@ -84,7 +84,7 @@ class Downloader:
             return isrc, None
             
         except Exception as e:
-            print(f"⚠️  Spotify API error: {e}", file=sys.stderr)
+            print(f"⚠️ Spotify API error: {e}", file=sys.stderr)
             return None, None
 
     def _lookup_isrc(self, url: str, source_type: str) -> tuple[Optional[str], Optional[dict]]:
@@ -130,7 +130,7 @@ class Downloader:
         password = self.config.dabmusic_password
         
         if not email or not password:
-            print("ℹ️  DAB Music credentials not configured, skipping")
+            print("ℹ️ DAB Music credentials not configured, skipping")
             return False
         
         try:
@@ -143,16 +143,16 @@ class Downloader:
             track = client.search_by_isrc(isrc)
             
             if not track:
-                print("ℹ️  Track not found on DAB Music")
+                print("ℹ️ Track not found on DAB Music")
                 return False
             
             # Verify ISRC matches
             if track.get('isrc') != isrc:
-                print(f"⚠️  ISRC mismatch: expected {isrc}, got {track.get('isrc')}")
+                print(f"⚠️ ISRC mismatch: expected {isrc}, got {track.get('isrc')}")
                 return False
             
             print(f"✅ Found on DAB Music: {track['title']} by {track['artist']}")
-            print(f"⬇️  Downloading FLAC from DAB Music...")
+            print(f"⬇️ Downloading FLAC from DAB Music...")
             
             # Generate output path using existing naming convention
             from .metadata import sanitize_filename
@@ -189,7 +189,7 @@ class Downloader:
                 return False
                 
         except Exception as e:
-            print(f"⚠️  DAB Music error: {e}", file=sys.stderr)
+            print(f"⚠️ DAB Music error: {e}", file=sys.stderr)
             return False
     
     def _apply_dab_metadata(self, file_path: Path, track: dict, isrc: str, spotify_metadata: Optional[dict] = None):
@@ -248,12 +248,12 @@ class Downloader:
                     audio.save()
                     
                 except Exception as e:
-                    print(f"⚠️  Failed to embed cover art: {e}", file=sys.stderr)
+                    print(f"⚠️ Failed to embed cover art: {e}", file=sys.stderr)
             
             print(f"✅ Metadata applied (including ISRC: {isrc})")
             
         except Exception as e:
-            print(f"⚠️  Failed to apply metadata: {e}", file=sys.stderr)
+            print(f"⚠️ Failed to apply metadata: {e}", file=sys.stderr)
     
     def _convert_to_m4a(self, flac_path: Path) -> Optional[Path]:
         """Convert FLAC to M4A at 256kbps AAC.
@@ -322,14 +322,14 @@ class Downloader:
             return m4a_path
             
         except subprocess.CalledProcessError as e:
-            print(f"⚠️  FFmpeg conversion failed: {e.stderr}", file=sys.stderr)
+            print(f"⚠️ FFmpeg conversion failed: {e.stderr}", file=sys.stderr)
             return None
         except Exception as e:
-            print(f"⚠️  Conversion error: {e}", file=sys.stderr)
+            print(f"⚠️ Conversion error: {e}", file=sys.stderr)
             return None
                 
         except Exception as e:
-            print(f"⚠️  DAB Music error: {e}", file=sys.stderr)
+            print(f"⚠️ DAB Music error: {e}", file=sys.stderr)
             return False
 
     def detect_source(self, url: str) -> str:
@@ -379,7 +379,7 @@ class Downloader:
                     return  # Successfully downloaded from DAB Music
 
         # Fallback to original source
-        print(f"⬇️  Downloading from {source_type}...")
+        print(f"⬇️ Downloading from {source_type}...")
         print()
         
         # Route to appropriate handler

@@ -152,7 +152,7 @@ email = config.dabmusic_email
 password = config.dabmusic_password
 
 if not email or password:
-    print("ℹ️  DAB Music credentials not configured, skipping")
+    print("ℹ️ DAB Music credentials not configured, skipping")
     return False  # Fall back to original source
 
 # Login
@@ -167,12 +167,12 @@ client = DABMusicClient(email, password)
 track_data = client.search_by_isrc(isrc)
 
 if not track_data:
-    print("ℹ️  Track not found on DAB Music")
+    print("ℹ️ Track not found on DAB Music")
     return False  # Fall back to original source
 
 # Verify ISRC matches (safety check)
 if track_data['isrc'] != isrc:
-    print("⚠️  ISRC mismatch")
+    print("⚠️ ISRC mismatch")
     return False
 ```
 
@@ -312,7 +312,7 @@ print(f"✅ Downloaded and converted to M4A: {m4a_path}")
 **When DAB Music fails (no ISRC, not found, or error):**
 
 ```python
-print(f"⬇️  Downloading from {source_type}...")
+print(f"⬇️ Downloading from {source_type}...")
 
 # Route to appropriate handler
 if source_type == "spotify":
@@ -536,12 +536,14 @@ track-manager download <url>
 For direct audio URLs (e.g., `https://example.com/audio.mp3`), the system skips ISRC lookup and DAB Music search:
 
 **Why?**
+
 - User has already found the specific file they want
 - Direct URLs rarely have ISRC metadata
 - No point searching for alternative sources
 - Faster download process
 
 **Behavior:**
+
 - Direct URLs → Download immediately as-is
 - No ISRC lookup
 - No DAB Music search

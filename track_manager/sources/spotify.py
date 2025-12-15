@@ -105,13 +105,13 @@ class SpotifyDownloader(BaseDownloader):
             # Ask for confirmation if > threshold
             if track_count > self.config.playlist_threshold:
                 response = input(
-                    f"⚠️  Large playlist ({track_count} tracks). Continue? [y/N]: "
+                    f"⚠️ Large playlist ({track_count} tracks). Continue? [y/N]: "
                 )
                 if response.lower() != "y":
                     print("Cancelled")
                     return
 
-            print("⬇️  Downloading...")
+            print("⬇️ Downloading...")
             print()
 
             success = 0
@@ -127,7 +127,7 @@ class SpotifyDownloader(BaseDownloader):
                     )
                     if existing_duplicates:
                         print(
-                            f"⏭️  Skipped: Already exists at {existing_duplicates[0].name}"
+                            f"⏭️ Skipped: Already exists at {existing_duplicates[0].name}"
                         )
                         continue
 
@@ -145,12 +145,12 @@ class SpotifyDownloader(BaseDownloader):
                         else:
                             failed += 1
                     else:
-                        print("⚠️  Download failed")
+                        print("⚠️ Download failed")
                         self.log_failure(song.url, "Download returned None")
                         failed += 1
 
                 except Exception as e:
-                    print(f"⚠️  Error: {e}")
+                    print(f"⚠️ Error: {e}", file=sys.stderr)
                     self.log_failure(song.url, str(e))
                     failed += 1
 
@@ -282,7 +282,7 @@ class SpotifyDownloader(BaseDownloader):
             if self.check_duplicate(file_path):
                 # User chose to skip
                 file_path.unlink()
-                print("⏭️  Skipped (duplicate)")
+                print("⏭️ Skipped (duplicate)")
                 return True
 
             # Rename if needed
@@ -293,5 +293,5 @@ class SpotifyDownloader(BaseDownloader):
             return True
 
         except Exception as e:
-            print(f"⚠️  Error processing: {e}")
+            print(f"⚠️ Error processing: {e}", file=sys.stderr)
             return False

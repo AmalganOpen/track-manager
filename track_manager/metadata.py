@@ -106,7 +106,7 @@ def flag_for_review(file_path: Path, reason: str, url: str, csv_path: Path):
             }
         )
 
-    print(f"⚠️  Flagged for review: {file_path.name}")
+    print(f"⚠️ Flagged for review: {file_path.name}")
     print(f"   Reason: {reason}")
 
 
@@ -204,7 +204,7 @@ def apply_metadata_csv(csv_path: Path, dry_run: bool = False) -> dict:
 
         # Check if file exists
         if not file_path.exists():
-            print(f"⚠️  File not found: {file_path}")
+            print(f"⚠️ File not found: {file_path}")
             result["errors"] += 1
             continue
 
@@ -234,7 +234,7 @@ def apply_metadata_csv(csv_path: Path, dry_run: bool = False) -> dict:
 
             print()
             print(f"✅ Processed {result['processed']} tracks")
-            print(f"⚠️  {result['remaining']} rows remain for review")
+            print(f"⚠️ {result['remaining']} rows remain for review")
             print(f"   Review at: {csv_path}")
         else:
             # Remove empty CSV
@@ -279,7 +279,7 @@ def update_metadata(file_path: Path, artist: str, title: str) -> bool:
             # Use easy interface for other formats
             audio = MutagenFile(str(file_path), easy=True)
             if not audio:
-                print(f"⚠️  Could not read file: {file_path}")
+                print(f"⚠️ Could not read file: {file_path}")
                 return False
 
             audio["artist"] = [artist]
@@ -291,7 +291,7 @@ def update_metadata(file_path: Path, artist: str, title: str) -> bool:
         new_path = file_path.parent / new_name
 
         if new_path.exists() and new_path != file_path:
-            print(f"⚠️  Target file already exists: {new_name}")
+            print(f"⚠️ Target file already exists: {new_name}")
             print(f"   Keeping original name: {file_path.name}")
             return True
 
@@ -304,7 +304,7 @@ def update_metadata(file_path: Path, artist: str, title: str) -> bool:
         return True
 
     except Exception as e:
-        print(f"⚠️  Error updating {file_path}: {e}")
+        print(f"⚠️ Error updating {file_path}: {e}")
         return False
 
 
@@ -333,7 +333,7 @@ def verify_library(output_dir: Path) -> dict:
                 junk_metadata.append((file_path, artist, title))
 
     if missing_metadata:
-        print(f"⚠️  {len(missing_metadata)} files with missing metadata:")
+        print(f"⚠️ {len(missing_metadata)} files with missing metadata:")
         for f, a, t in missing_metadata[:10]:
             print(f"  {f.name}")
             print(f"    Artist: {a or '(missing)'}")
@@ -343,7 +343,7 @@ def verify_library(output_dir: Path) -> dict:
         print()
 
     if junk_metadata:
-        print(f"⚠️  {len(junk_metadata)} files with junk in metadata:")
+        print(f"⚠️ {len(junk_metadata)} files with junk in metadata:")
         for f, a, t in junk_metadata[:10]:
             print(f"  {f.name}")
             print(f"    Artist: {a}")

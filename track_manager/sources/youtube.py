@@ -65,17 +65,17 @@ class YouTubeDownloader(BaseDownloader):
                     # Ask for confirmation if > threshold
                     if track_count > self.config.playlist_threshold:
                         response = input(
-                            f"⚠️  Large playlist ({track_count} videos). Continue? [y/N]: "
+                            f"⚠️ Large playlist ({track_count} videos). Continue? [y/N]: "
                         )
                         if response.lower() != "y":
                             print("Cancelled")
                             return
             except Exception as e:
-                print(f"⚠️  Could not extract info: {e}")
+                print(f"⚠️ Could not extract info: {e}", file=sys.stderr)
                 is_playlist = False
 
         # Download
-        print("⬇️  Downloading...")
+        print("⬇️ Downloading...")
         print()
 
         success = 0
@@ -146,7 +146,7 @@ class YouTubeDownloader(BaseDownloader):
                     break
 
             if not temp_file or not temp_file.exists():
-                print(f"⚠️  Downloaded file not found for {video_id}")
+                print(f"⚠️ Downloaded file not found for {video_id}")
                 return False
 
             # Extract metadata
@@ -175,7 +175,7 @@ class YouTubeDownloader(BaseDownloader):
             if self.check_duplicate(temp_file):
                 # User chose to skip
                 temp_file.unlink()
-                print("⏭️  Skipped (duplicate)")
+                print("⏭️ Skipped (duplicate)")
                 return True
 
             # Move to final location
@@ -185,5 +185,5 @@ class YouTubeDownloader(BaseDownloader):
             return True
 
         except Exception as e:
-            print(f"⚠️  Error processing download: {e}", file=sys.stderr)
+            print(f"⚠️ Error processing download: {e}", file=sys.stderr)
             return False

@@ -47,7 +47,7 @@ class SongLinkClient:
             }
 
         except requests.RequestException as e:
-            print(f"⚠️  song.link API error: {e}", file=sys.stderr)
+            print(f"⚠️ song.link API error: {e}", file=sys.stderr)
             return {}
 
     def find_spotify_url(self, url: str) -> Optional[str]:
@@ -91,5 +91,5 @@ class SongLinkClient:
             return None
 
         except requests.RequestException as e:
-            print(f"⚠️  song.link API error: {e}", file=sys.stderr)
+            print(f"⚠️ song.link API error: {e}", file=sys.stderr)
             return None

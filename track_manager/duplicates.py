@@ -190,14 +190,14 @@ def check_file_duplicate(file_path: Path, library_dir: Path, handling: str) -> b
 
     # Handle based on mode
     if handling == "skip":
-        print(f"⚠️  Duplicate found: {file_path.name}")
+        print(f"⚠️ Duplicate found: {file_path.name}")
         return True
 
     elif handling == "keep":
         return False
 
     else:  # interactive
-        print(f"\n⚠️  Duplicate track detected!")
+        print(f"\n⚠️ Duplicate track detected!")
         print(f"New file: {file_path.name}")
         print(f"  Artist: {artist}")
         print(f"  Title: {title}")
@@ -261,7 +261,7 @@ def scan_library(library_dir: Path) -> dict:
         print("✅ No duplicates found")
         return {}
 
-    print(f"⚠️  Found {len(duplicates)} duplicate groups:\n")
+    print(f"⚠️ Found {len(duplicates)} duplicate groups:\n")
 
     for key, files in duplicates.items():
         artist, title = key.split("|||")
@@ -286,14 +286,14 @@ def check_file(file_path: Path, library_dir: Path):
     artist, title = extract_metadata(file_path)
 
     if not artist or not title:
-        print("⚠️  Could not extract metadata")
+        print("⚠️ Could not extract metadata")
         return
 
     duplicates = find_duplicates(artist, title, library_dir)
     duplicates = [d for d in duplicates if d.resolve() != file_path.resolve()]
 
     if duplicates:
-        print(f"⚠️  Found {len(duplicates)} duplicate(s):")
+        print(f"⚠️ Found {len(duplicates)} duplicate(s):")
         for dup in duplicates:
             print(f"  - {dup.name}")
     else:

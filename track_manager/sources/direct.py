@@ -26,7 +26,7 @@ class DirectDownloader(BaseDownloader):
             url: Direct audio file URL
             format: Output format (auto, m4a, mp3)
         """
-        print("⬇️  Downloading direct audio file...")
+        print("⬇️ Downloading direct audio file...")
         print(f"URL: {url}")
         print()
 
@@ -39,7 +39,7 @@ class DirectDownloader(BaseDownloader):
             )
 
             if not original_ext:
-                print("⚠️  Could not determine file extension from URL")
+                print("⚠️ Could not determine file extension from URL")
                 original_ext = "m4a"  # Default
 
             print(f"Downloading...")
@@ -74,7 +74,7 @@ class DirectDownloader(BaseDownloader):
             if self._process_download(temp_file, url, format):
                 print("✅ Download complete")
             else:
-                print("⚠️  Download completed but processing failed", file=sys.stderr)
+                print("⚠️ Download completed but processing failed", file=sys.stderr)
                 self.log_failure(url, "Processing failed")
 
         except requests.exceptions.RequestException as e:
@@ -121,7 +121,7 @@ class DirectDownloader(BaseDownloader):
             if desired_format != "auto" and desired_format != current_ext:
                 # User wants different format, but we won't convert
                 # (would require ffmpeg, which we're avoiding as hard dependency)
-                print(f"ℹ️  Keeping original format ({current_ext})")
+                print(f"ℹ️ Keeping original format ({current_ext})")
                 print(
                     f"   To convert, install ffmpeg and use: ffmpeg -i input.{current_ext} output.{desired_format}"
                 )
@@ -138,7 +138,7 @@ class DirectDownloader(BaseDownloader):
             if self.check_duplicate(file_path):
                 # User chose to skip
                 file_path.unlink()
-                print("⏭️  Skipped (duplicate)")
+                print("⏭️ Skipped (duplicate)")
                 return True
 
             # Move to final location
@@ -149,5 +149,5 @@ class DirectDownloader(BaseDownloader):
             return True
 
         except Exception as e:
-            print(f"⚠️  Error processing download: {e}")
+            print(f"⚠️ Error processing download: {e}", file=sys.stderr)
             return False

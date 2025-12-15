@@ -43,7 +43,7 @@ class SoundCloudDownloader(YouTubeDownloader):
         }
         
         # Use similar logic as parent but with SoundCloud-specific settings
-        print("⬇️  Downloading from SoundCloud...")
+        print("⬇️ Downloading from SoundCloud...")
         print()
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

@@ -38,7 +38,7 @@ def get_audio_info(file_path: Path) -> Optional[Dict]:
         return info
 
     except Exception as e:
-        print(f"⚠️  Error reading {file_path.name}: {e}")
+        print(f"⚠️ Error reading {file_path.name}: {e}")
         return None
 
 
@@ -172,7 +172,7 @@ def analyze_library(output_dir: Path, detailed: bool = False) -> Dict:
     ]
 
     if low_quality_files:
-        print(f"\n⚠️  {len(low_quality_files)} low-quality files detected (<128 kbps):")
+        print(f"\n⚠️ {len(low_quality_files)} low-quality files detected (<128 kbps):")
         for info in low_quality_files[:10]:
             print(f"  {info['file']} - {format_bitrate(info['bitrate'])}")
         if len(low_quality_files) > 10:

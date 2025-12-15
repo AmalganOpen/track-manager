@@ -10,20 +10,21 @@ Use these emoji consistently across all output:
 
 - **Success:** ✅ (U+2705) - Always use this, not ✓
 - **Error:** ❌ (U+274C)
-- **Warning:** ⚠️  (U+26A0 + FE0F)
-- **Info:** ℹ️  (U+2139 + FE0F)
-- **Progress:** ⬇️  (U+2B07 + FE0F) for downloads
+- **Warning:** ⚠️ (U+26A0 + FE0F)
+- **Info:** ℹ️ (U+2139 + FE0F)
+- **Progress:** ⬇️ (U+2B07 + FE0F) for downloads
 - **Search:** 🔍 (U+1F50D)
 - **Music:** 🎵 (U+1F3B5)
 - **Folder:** 📁 (U+1F4C1)
 - **Link:** 🔗 (U+1F517)
 - **Stats:** 📊 (U+1F4CA)
-- **Skip:** ⏭️  (U+23ED + FE0F)
+- **Skip:** ⏭️ (U+23ED + FE0F)
 - **Party:** 🎉 (U+1F389) for completion
 
 ### Emoji Spacing
 
 Always include exactly one space after emoji:
+
 ```python
 print("✅ Success")      # Correct
 print("✅Success")       # Wrong
@@ -43,6 +44,7 @@ print("✅ All checks passed")
 ### Error Messages
 
 Always write to stderr:
+
 ```python
 print("❌ Download failed: connection timeout", file=sys.stderr)
 print("❌ File not found: track.mp3", file=sys.stderr)
@@ -51,22 +53,23 @@ print("❌ File not found: track.mp3", file=sys.stderr)
 ### Warning Messages
 
 ```python
-print("⚠️  No metadata found")
-print("⚠️  Duplicate detected")
+print("⚠️ No metadata found")
+print("⚠️ Duplicate detected")
 ```
 
 ### Info Messages
 
 ```python
-print("ℹ️  Using format: M4A")
-print("ℹ️  Keeping original format")
+print("ℹ️ Using format: M4A")
+print("ℹ️ Keeping original format")
 ```
 
 ### Progress Messages
 
 Use flush for dynamic updates:
+
 ```python
-print(f"⬇️  Downloading... {progress}%", end="\r", flush=True)
+print(f"⬇️ Downloading... {progress}%", end="\r", flush=True)
 print()  # Clear line after completion
 ```
 
@@ -98,7 +101,7 @@ print("🎵 Detected source: Spotify")
 print("📁 Output directory: /path/to/dir")
 print()  # Blank line after section
 
-print("⬇️  Downloading...")
+print("⬇️ Downloading...")
 # No blank line here - related to download
 print("✅ Download complete")
 print()  # Blank line after completion
@@ -156,7 +159,7 @@ choice = input("Choice [s/k/r]: ").lower().strip()
 ```python
 print("✅ Saved: filename.mp3")
 print("✅ Renamed: old.mp3 → new.mp3")
-print("⏭️  Skipped: filename.mp3 (duplicate)")
+print("⏭️ Skipped: filename.mp3 (duplicate)")
 ```
 
 ### Statistics
@@ -180,6 +183,7 @@ print("✅ Found on Spotify")
 ### Exceptions
 
 Always include context:
+
 ```python
 except Exception as e:
     print(f"❌ Download failed: {e}", file=sys.stderr)
@@ -209,7 +213,7 @@ print("🔍 Found ISRC: US1234567890")
 print("🎵 Searching DAB Music...")
 print("✅ Found on DAB Music")
 print()
-print("⬇️  Downloading FLAC...")
+print("⬇️ Downloading FLAC...")
 print("✅ Downloaded successfully")
 print()
 print("📊 Summary")
@@ -221,22 +225,23 @@ print("  Size: 45.2 MB")
 ### Bad
 
 ```python
-print("🎵Detected source: spotify")  # Missing space, lowercase
-print("Output directory: ~/Music")    # Missing emoji
+print("🎵 Detected source: spotify")  # Missing space, lowercase
+print("Output directory: ~/Music")   # Missing emoji
 print("Found ISRC: US1234567890")    # Missing emoji, inconsistent
 print()
 print()  # Double blank line
 print("Searching DAB Music...")      # Missing emoji
-print("✓ Found")                      # Wrong emoji, too terse
+print("✓ Found")                     # Wrong emoji, too terse
 print("Downloading FLAC...")         # Missing emoji
-print("✅ Downloaded.")               # Unnecessary period
-print("SUMMARY:")                     # All caps, missing emoji
+print("✅ Downloaded.")              # Unnecessary period
+print("SUMMARY:")                    # All caps, missing emoji
 print("Format: FLAC")                # Missing indentation
 ```
 
 ## Testing
 
 When adding new output:
+
 1. Check emoji consistency
 2. Verify stderr for errors
 3. Test line breaks and spacing

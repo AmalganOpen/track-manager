@@ -52,7 +52,7 @@ class BaseDownloader(ABC):
 
             return artist, title
         except Exception as e:
-            print(f"⚠️  Error reading metadata: {e}", file=sys.stderr)
+            print(f"⚠️ Error reading metadata: {e}", file=sys.stderr)
             return None, None
 
     def sanitize_filename(self, text: str) -> str:

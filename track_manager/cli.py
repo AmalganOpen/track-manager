@@ -103,7 +103,7 @@ def download(url: str, format: str, output: Optional[str]):
     try:
         downloader.download(url, format)
     except KeyboardInterrupt:
-        click.echo("\n⚠️  Download cancelled by user")
+        click.echo("\n⚠️ Download cancelled by user")
         sys.exit(1)
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
@@ -186,7 +186,7 @@ def check_setup():
 
         click.echo("✅ spotdl: Installed")
     except ImportError:
-        click.echo("⚠️  spotdl: Not installed (optional, needed for Spotify)")
+        click.echo("⚠️ spotdl: Not installed (optional, needed for Spotify)")
         click.echo("   Install: pip install spotdl")
 
     # Check requests
@@ -234,7 +234,7 @@ def check_setup():
         config = Config()
         click.echo("✅ Configuration: config.yaml found")
     except SystemExit:
-        click.echo("⚠️  Configuration: config.yaml not found")
+        click.echo("⚠️ Configuration: config.yaml not found")
         click.echo("   Copy config.example.yaml to config.yaml")
 
     click.echo()
@@ -246,7 +246,7 @@ def check_setup():
         click.echo("  1. Ensure config.yaml is set up")
         click.echo("  2. Run: track-manager download <url>")
     else:
-        click.echo("⚠️  Some dependencies are missing. Please install them first.", err=True)
+        click.echo("⚠️ Some dependencies are missing. Please install them first.", err=True)
         sys.exit(1)
 
 
