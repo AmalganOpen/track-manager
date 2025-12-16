@@ -45,11 +45,19 @@ class SpotifyDownloader(BaseDownloader):
         # Validate credentials
         if not client_id or not client_secret:
             print("\n❌ Spotify API credentials not found", file=sys.stderr)
-            print("\n📝 Note: Spotify downloads require API credentials", file=sys.stderr)
-            print("   Other sources (YouTube, SoundCloud, direct URLs) work without setup!\n", file=sys.stderr)
+            print(
+                "\n📝 Note: Spotify downloads require API credentials", file=sys.stderr
+            )
+            print(
+                "   Other sources (YouTube, SoundCloud, direct URLs) work without setup!\n",
+                file=sys.stderr,
+            )
             print("🔧 Setup options:\n", file=sys.stderr)
             print("   1. Run: track-manager init", file=sys.stderr)
-            print("      Then edit: ~/.config/track-manager/config.yaml\n", file=sys.stderr)
+            print(
+                "      Then edit: ~/.config/track-manager/config.yaml\n",
+                file=sys.stderr,
+            )
             print("   2. Or set environment variables:", file=sys.stderr)
             print("      export SPOTIPY_CLIENT_ID='your_id'", file=sys.stderr)
             print("      export SPOTIPY_CLIENT_SECRET='your_secret'\n", file=sys.stderr)

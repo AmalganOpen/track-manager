@@ -10,7 +10,9 @@ import requests
 class DABMusicClient:
     """Client for DAB Music API."""
 
-    def __init__(self, email: str, password: str, endpoint: str = "https://dabmusic.xyz"):
+    def __init__(
+        self, email: str, password: str, endpoint: str = "https://dabmusic.xyz"
+    ):
         """Initialize DAB Music client.
 
         Args:
@@ -25,7 +27,7 @@ class DABMusicClient:
                 "User-Agent": "track-manager/0.2.0",
             }
         )
-        
+
         # Login to get session
         self._login(email, password)
 
@@ -45,12 +47,12 @@ class DABMusicClient:
                 json={"email": email, "password": password},
                 timeout=10,
             )
-            
+
             if response.status_code == 401:
                 raise ValueError("Invalid DAB Music credentials")
-            
+
             response.raise_for_status()
-            
+
             # Session cookie is automatically stored in self.session
             print("✅ Logged in to DAB Music")
 
@@ -77,11 +79,11 @@ class DABMusicClient:
 
             data = response.json()
             tracks = data.get("tracks", [])
-            
+
             if tracks:
                 # Return first match
                 return tracks[0]
-            
+
             return None
 
         except requests.RequestException as e:

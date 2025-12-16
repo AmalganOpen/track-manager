@@ -34,16 +34,16 @@ class SongLinkClient:
             requests.RequestException: If API request fails
         """
         try:
-            response = self.session.get(
-                f"{self.API_BASE}?url={quote(url)}", timeout=10
-            )
+            response = self.session.get(f"{self.API_BASE}?url={quote(url)}", timeout=10)
             response.raise_for_status()
 
             data = response.json()
             platforms = data.get("linksByPlatform", {})
 
             return {
-                platform: info["url"] for platform, info in platforms.items() if "url" in info
+                platform: info["url"]
+                for platform, info in platforms.items()
+                if "url" in info
             }
 
         except requests.RequestException as e:
@@ -72,9 +72,7 @@ class SongLinkClient:
             Dictionary with title, artist, etc. if found
         """
         try:
-            response = self.session.get(
-                f"{self.API_BASE}?url={quote(url)}", timeout=10
-            )
+            response = self.session.get(f"{self.API_BASE}?url={quote(url)}", timeout=10)
             response.raise_for_status()
 
             data = response.json()

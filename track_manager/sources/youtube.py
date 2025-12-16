@@ -26,7 +26,7 @@ class YouTubeDownloader(BaseDownloader):
             format: Output format (auto, m4a, mp3)
         """
         # Determine output format
-        if format == "auto": 
+        if format == "auto":
             audio_format = "m4a"
         else:
             audio_format = format

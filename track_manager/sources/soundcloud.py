@@ -15,16 +15,16 @@ class SoundCloudDownloader(YouTubeDownloader):
 
     def download(self, url: str, format: str = "auto"):
         """Download from SoundCloud.
-        
+
         Uses 128kbps target to match free tier quality.
         Without Go+ credentials, only free tier (~128kbps) is accessible.
         """
         # Temporarily override preferredquality for SoundCloud
         import yt_dlp
-        
+
         # Get parent's ydl_opts
         audio_format = "m4a" if format == "auto" else format
-        
+
         # Match free tier quality (no Go+ credentials)
         ydl_opts = {
             "format": "bestaudio/best",
@@ -41,21 +41,21 @@ class SoundCloudDownloader(YouTubeDownloader):
             "extract_flat": False,
             "remote_components": ["ejs:github"],
         }
-        
+
         # Use similar logic as parent but with SoundCloud-specific settings
         print("⬇️ Downloading from SoundCloud...")
         print()
-        
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
                 info = ydl.extract_info(url, download=True)
-                
+
                 # Process the download
                 if self._process_download(info, audio_format):
                     print("✅ Download complete")
                 else:
                     print("❌ Download failed", file=sys.stderr)
-                    
+
             except Exception as e:
                 print(f"❌ Download failed: {e}", file=sys.stderr)
                 self.log_failure(url, str(e))

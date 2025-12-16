@@ -87,7 +87,7 @@ def download(url: str, format: str, output: Optional[str]):
     """Download track(s) from URL.
 
     Supports: Spotify, YouTube, SoundCloud, and direct URLs.
-    
+
     Automatically downloads FLAC from DAB Music when available via ISRC lookup.
     """
     config = Config()
@@ -248,7 +248,9 @@ def check_setup():
         click.echo("  Tip: You can use the 'tm' alias instead of 'track-manager'")
 
     else:
-        click.echo("⚠️ Some dependencies are missing. Please install them first.", err=True)
+        click.echo(
+            "⚠️ Some dependencies are missing. Please install them first.", err=True
+        )
         sys.exit(1)
 
 
@@ -257,7 +259,7 @@ def init():
     """Initialize configuration file in ~/.config/track-manager/."""
     config_dir = Path.home() / ".config" / "track-manager"
     config_path = config_dir / "config.yaml"
-    
+
     if config_path.exists():
         click.echo(f"✅ Config already exists: {config_path}")
         click.echo()
@@ -265,10 +267,10 @@ def init():
         click.echo(f"  1. Edit: {config_path}")
         click.echo(f"  2. Delete and run 'track-manager init' again")
         return
-    
+
     # Create config directory
     config_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Copy example config
     example = Path(__file__).parent.parent / "config.example.yaml"
     if not example.exists():
@@ -277,11 +279,14 @@ def init():
         click.echo()
         click.echo("Manually create config.yaml with:", err=True)
         click.echo(f"  mkdir -p {config_dir}", err=True)
-        click.echo(f"  curl https://raw.githubusercontent.com/AmalganOpen/track-manager/main/config.example.yaml -o {config_path}", err=True)
+        click.echo(
+            f"  curl https://raw.githubusercontent.com/AmalganOpen/track-manager/main/config.example.yaml -o {config_path}",
+            err=True,
+        )
         sys.exit(1)
-    
+
     shutil.copy(example, config_path)
-    
+
     click.echo(f"✅ Created config: {config_path}")
     click.echo()
     click.echo("📝 Configuration:")
