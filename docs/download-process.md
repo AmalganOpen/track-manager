@@ -312,8 +312,6 @@ print(f"✅ Downloaded and converted to M4A: {m4a_path}")
 **When DAB Music fails (no ISRC, not found, or error):**
 
 ```python
-print(f"⬇️ Downloading from {source_type}...")
-
 # Route to appropriate handler
 if source_type == "spotify":
     handler = SpotifyDownloader(config, output_dir)

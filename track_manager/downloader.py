@@ -119,6 +119,9 @@ class Downloader:
             spotify_id = self._extract_spotify_id(spotify_url)
             if spotify_id:
                 return self._get_isrc_from_spotify(spotify_id, return_metadata=True)
+        else:
+            print("ℹ️ No match found on song.link")
+            print("   Proceeding to download from original source")
 
         return None, None
 

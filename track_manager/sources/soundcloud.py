@@ -3,6 +3,7 @@
 SoundCloud support via yt-dlp - similar to YouTube handler.
 """
 
+import sys
 from .youtube import YouTubeDownloader
 
 
@@ -43,8 +44,6 @@ class SoundCloudDownloader(YouTubeDownloader):
         }
 
         # Use similar logic as parent but with SoundCloud-specific settings
-        print("⬇️ Downloading from SoundCloud...")
-        print()
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:

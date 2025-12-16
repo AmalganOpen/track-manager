@@ -45,7 +45,7 @@ class YouTubeDownloader(BaseDownloader):
                 }
             ],
             "outtmpl": str(self.output_dir / ".tmp_%(id)s.%(ext)s"),
-            "quiet": False,
+            "quiet": True,
             "no_warnings": False,
             "extract_flat": False,
             # Enable remote components for solving JS challenges to access high-quality formats
@@ -75,8 +75,6 @@ class YouTubeDownloader(BaseDownloader):
                 is_playlist = False
 
         # Download
-        print("⬇️ Downloading...")
-        print()
 
         success = 0
         failed = 0

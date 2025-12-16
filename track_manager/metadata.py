@@ -108,6 +108,7 @@ def flag_for_review(file_path: Path, reason: str, url: str, csv_path: Path):
 
     print(f"⚠️ Flagged for review: {file_path.name}")
     print(f"   Reason: {reason}")
+    print(f"   Review/edit CSV: file://{csv_path.resolve()}")
 
 
 def show_pending_reviews(csv_path: Path):
