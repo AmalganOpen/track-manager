@@ -18,12 +18,21 @@ class TestSpotifyDuplicateDetection:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.output_dir = Path(self.temp_dir.name)
 
-        # Create a mock config
+        # Create a mock config with Spotify credentials
         self.config = MagicMock(spec=Config)
         self.config.output_dir = self.output_dir
         self.config.duplicate_handling = "skip"
         self.config.playlist_threshold = 50
-        self.config.get = MagicMock(return_value="")
+        
+        # Mock config.get to return fake credentials
+        def mock_get(key, default=""):
+            if key == "spotdl.client_id":
+                return "fake_client_id"
+            elif key == "spotdl.client_secret":
+                return "fake_client_secret"
+            return default
+        
+        self.config.get = MagicMock(side_effect=mock_get)
 
     def teardown_method(self):
         """Clean up test fixtures."""
