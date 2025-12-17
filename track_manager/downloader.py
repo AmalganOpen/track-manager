@@ -118,7 +118,6 @@ class Downloader:
         spotify_url = songlink.find_spotify_url(url)
 
         if spotify_url:
-            print("✅ Found on Spotify")
             spotify_id = self._extract_spotify_id(spotify_url)
             if spotify_id:
                 return self._get_isrc_from_spotify(spotify_id, return_metadata=True)
