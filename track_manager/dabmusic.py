@@ -55,6 +55,10 @@ class DABMusicClient:
 
             # Session cookie is automatically stored in self.session
             print("✅ Logged in to DAB Music")
+            
+            # Small delay to allow session to propagate across backend services
+            import time
+            time.sleep(0.5)
 
         except requests.RequestException as e:
             print(f"❌ DAB Music login failed: {e}", file=sys.stderr)
@@ -70,7 +74,12 @@ class DABMusicClient:
             Track data if found
         """
         try:
-            response = self.session.get(
+            # Create fresh session for each search to avoid state corruption
+            session = requests.Session()
+            session.headers.update(self.session.headers)
+            session.cookies.update(self.session.cookies)
+            
+            response = session.get(
                 f"{self.endpoint}/api/search",
                 params={"q": isrc, "type": "track"},
                 timeout=10,
@@ -79,6 +88,9 @@ class DABMusicClient:
 
             data = response.json()
             tracks = data.get("tracks", [])
+
+            # Explicitly close session
+            session.close()
 
             if tracks:
                 # Return first match
@@ -104,8 +116,13 @@ class DABMusicClient:
             True if successful
         """
         try:
+            # Create fresh session for download to avoid state corruption
+            session = requests.Session()
+            session.headers.update(self.session.headers)
+            session.cookies.update(self.session.cookies)
+            
             # Get stream URL
-            response = self.session.get(
+            response = session.get(
                 f"{self.endpoint}/api/stream",
                 params={"trackId": track_id, "quality": quality},
                 timeout=10,
@@ -116,16 +133,20 @@ class DABMusicClient:
             stream_url = stream_data.get("url")
 
             if not stream_url:
+                session.close()
                 print("❌ No stream URL returned", file=sys.stderr)
                 return False
 
             # Download audio file
-            response = self.session.get(stream_url, timeout=60)
+            response = session.get(stream_url, timeout=60)
             response.raise_for_status()
 
             # Save to file
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_bytes(response.content)
+            
+            # Explicitly close session
+            session.close()
 
             return True
 
