@@ -20,6 +20,7 @@ Use these emoji consistently across all output:
 - **Stats:** 📊 (U+1F4CA)
 - **Skip:** ⏭️ (U+23ED + FE0F)
 - **Party:** 🎉 (U+1F389) for completion
+- **Convert:** 🔄 (U+1F501) for format conversion (e.g. FLAC → M4A)
 
 ### Emoji Spacing
 

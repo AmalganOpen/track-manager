@@ -82,9 +82,7 @@ class YouTubeDownloader(BaseDownloader):
                     )
                     
                     if smart_success:
-                        print("    Downloaded via smart download")
                         success += 1
-                        print()
                         continue
                     
                     # Fallback to yt-dlp

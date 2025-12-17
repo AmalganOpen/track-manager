@@ -156,9 +156,7 @@ class SpotifyDownloader(BaseDownloader):
                         )
                         
                         if smart_success:
-                            print("    Downloaded via smart download")
                             success += 1
-                            print()
                             continue
 
                     # Fallback: Download song using spotdl

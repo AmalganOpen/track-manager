@@ -201,13 +201,16 @@ class Downloader:
                 m4a_path = self._convert_to_m4a(output_path)
                 if m4a_path:
                     print(f"✅ Downloaded and converted to M4A: {m4a_path}")
+                    print()
                     return True
                 else:
                     # Conversion failed, but FLAC is still there
                     print(f"✅ Downloaded FLAC (conversion failed): {output_path}")
+                    print()
                     return True
             else:
                 print("❌ DAB Music download failed", file=sys.stderr)
+                print()
                 return False
 
         except Exception as e:
@@ -242,7 +245,6 @@ class Downloader:
                 title = spotify_metadata.get("title", track.get("title", ""))
                 album = spotify_metadata.get("album", track.get("albumTitle", ""))
                 
-                print(f"   Using Spotify metadata: {artist_str} - {title}")
             else:
                 # Fallback to DAB metadata (shouldn't happen in practice)
                 artist_str = track.get("artist", "")
@@ -312,8 +314,20 @@ class Downloader:
         try:
             print(f"🔄 Converting to M4A (256kbps AAC)...")
 
-            # Extract cover art from FLAC before conversion
+            # Extract metadata and cover art from FLAC before conversion
             flac_audio = FLAC(str(flac_path))
+            
+            # Store all metadata to re-apply after conversion
+            metadata = {
+                'title': flac_audio.get('TITLE', [''])[0],
+                'artist': flac_audio.get('ARTIST', [''])[0],
+                'album': flac_audio.get('ALBUM', [''])[0],
+                'date': flac_audio.get('DATE', [''])[0],
+                'isrc': flac_audio.get('ISRC', [''])[0],
+                'barcode': flac_audio.get('BARCODE', [''])[0],
+                'label': flac_audio.get('LABEL', [''])[0],
+            }
+            
             cover_data = None
             if flac_audio.pictures:
                 cover_data = flac_audio.pictures[0].data
@@ -347,14 +361,41 @@ class Downloader:
             if not m4a_path.exists():
                 raise Exception("M4A file not created")
 
-            # Re-embed cover art into M4A
+            # Re-apply metadata to M4A (FFmpeg doesn't transfer all fields)
+            m4a_audio = MP4(str(m4a_path))
+            
+            # Map FLAC Vorbis comments to M4A atoms
+            if metadata.get('title'):
+                m4a_audio['\xa9nam'] = metadata['title']
+            if metadata.get('artist'):
+                m4a_audio['\xa9ART'] = metadata['artist']
+            if metadata.get('album'):
+                m4a_audio['\xa9alb'] = metadata['album']
+            if metadata.get('date'):
+                m4a_audio['\xa9day'] = metadata['date']
+            
+            # ISRC uses a special freeform atom
+            if metadata.get('isrc'):
+                m4a_audio['----:com.apple.iTunes:ISRC'] = metadata['isrc'].encode('utf-8')
+            
+            # Barcode/UPC
+            if metadata.get('barcode'):
+                m4a_audio['----:com.apple.iTunes:BARCODE'] = metadata['barcode'].encode('utf-8')
+            
+            # Label
+            if metadata.get('label'):
+                m4a_audio['----:com.apple.iTunes:LABEL'] = metadata['label'].encode('utf-8')
+            
+            # Re-embed cover art
             if cover_data:
-                m4a_audio = MP4(str(m4a_path))
                 m4a_audio["covr"] = [
                     MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)
                 ]
-                m4a_audio.save()
-                print(f"✅ Re-embedded cover art")
+            
+            m4a_audio.save()
+            print(f"🔄 Re-applied metadata (including ISRC: {metadata.get('isrc', 'N/A')})")
+            if cover_data:
+                print(f"🔄 Re-embedded cover art")
 
             # Delete FLAC file
             flac_path.unlink()
