@@ -38,6 +38,7 @@ class YouTubeDownloader(BaseDownloader):
         # Detect if URL is a playlist (don't use extract_flat for detection)
         with yt_dlp.YoutubeDL({
             "quiet": True,
+            "no_warnings": True,
             "noplaylist": False,  # Extract playlists even when video ID is present
             "extract_flat": "in_playlist",  # Only flat-extract playlist entries
         }) as ydl:
@@ -59,8 +60,36 @@ class YouTubeDownloader(BaseDownloader):
                             print("Cancelled")
                             return
             except Exception as e:
-                print(f"⚠️ Could not extract info: {e}", file=sys.stderr)
-                is_playlist = False
+                error_msg = str(e).lower()
+                
+                # Check for private/restricted content indicators
+                private_indicators = [
+                    'private',
+                    'unavailable',
+                    'does not exist',  # YouTube's message for private playlists
+                    'sign in',
+                    'members-only',
+                    'join this channel',
+                ]
+                
+                is_private = any(indicator in error_msg for indicator in private_indicators)
+                
+                if is_private:
+                    print("❌ Cannot access playlist", file=sys.stderr)
+                    print()
+                    print("💡 This may be a private or members-only playlist.", file=sys.stderr)
+                    print("   To download it, you need to:", file=sys.stderr)
+                    print("   1. Go to YouTube and open the playlist", file=sys.stderr)
+                    print("   2. Click 'Edit' → 'Playlist privacy'", file=sys.stderr)
+                    print("   3. Change from 'Private' to 'Unlisted'", file=sys.stderr)
+                    print(file=sys.stderr)
+                    print("   Note: 'Unlisted' means only people with the link can view it.", file=sys.stderr)
+                    return
+                else:
+                    print(f"⚠️ Could not extract playlist info: {e}", file=sys.stderr)
+                    print(file=sys.stderr)
+                    print("💡 If this is a private playlist, make sure it's set to 'Unlisted' instead.", file=sys.stderr)
+                    return  # Don't continue - can't process this URL
 
         # Download tracks
         success = 0
@@ -84,7 +113,7 @@ class YouTubeDownloader(BaseDownloader):
                 
                 try:
                     # Try smart download
-                    print("  🔗 Trying smart download...")
+                    print("🔗 Trying smart download...")
                     smart_success = self.parent_downloader.try_smart_download(
                         video_url, audio_format, playlist_url=playlist_url
                     )
@@ -117,7 +146,6 @@ class YouTubeDownloader(BaseDownloader):
         else:
             # Single video with smart download support
             if not is_playlist and self.parent_downloader:
-                print("🔗 Trying smart download...")
                 smart_success = self.parent_downloader.try_smart_download(
                     url, audio_format
                 )
