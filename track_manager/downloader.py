@@ -26,6 +26,9 @@ class Downloader:
 
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Cache DAB Music client (created lazily on first use)
+        self._dab_client = None
 
     def _extract_spotify_id(self, url: str) -> Optional[str]:
         """Extract Spotify track ID from URL."""
@@ -149,8 +152,13 @@ class Downloader:
         try:
             from .dabmusic import DABMusicClient
 
+            # Create client once and reuse it
+            if self._dab_client is None:
+                print("🔐 Logging in to DAB Music...")
+                self._dab_client = DABMusicClient(email, password, self.config.dabmusic_endpoint)
+            
             print("🎵 Searching DAB Music...")
-            client = DABMusicClient(email, password, self.config.dabmusic_endpoint)
+            client = self._dab_client
 
             # Search by ISRC
             track = client.search_by_isrc(isrc)
@@ -170,15 +178,16 @@ class Downloader:
             # Generate output path using existing naming convention
             from .metadata import sanitize_filename
 
-            # Prefer Spotify's multi-artist data if available
-            if spotify_metadata and spotify_metadata.get("artists"):
-                artist = ", ".join(spotify_metadata["artists"])
-                print(f"   Using Spotify artist credits: {artist}")
+            # Use Spotify metadata for filename (same as file metadata)
+            if spotify_metadata:
+                artist = ", ".join(spotify_metadata["artists"]) if spotify_metadata.get("artists") else track["artist"]
+                title = spotify_metadata.get("title", track["title"])
             else:
                 artist = track["artist"]
+                title = track["title"]
 
             artist = sanitize_filename(artist)
-            title = sanitize_filename(track["title"])
+            title = sanitize_filename(title)
             output_path = self.output_dir / f"{artist} - {title}.flac"
 
             # Download (quality 27 = FLAC)
@@ -216,9 +225,9 @@ class Downloader:
 
         Args:
             file_path: Path to downloaded file
-            track: Track data from DAB Music
+            track: Track data from DAB Music (used only for cover art fallback)
             isrc: ISRC code
-            spotify_metadata: Optional Spotify metadata (for multi-artist support)
+            spotify_metadata: Spotify metadata (preferred source for all metadata)
         """
         try:
             import requests
@@ -226,19 +235,28 @@ class Downloader:
 
             audio = FLAC(str(file_path))
 
-            # Prefer Spotify's multi-artist data if available
-            if spotify_metadata and spotify_metadata.get("artists"):
-                artist_str = ", ".join(spotify_metadata["artists"])
+            # Use Spotify metadata when available (it's always provided for DAB downloads)
+            if spotify_metadata:
+                # Use Spotify's data for everything
+                artist_str = ", ".join(spotify_metadata["artists"]) if spotify_metadata.get("artists") else track.get("artist", "")
+                title = spotify_metadata.get("title", track.get("title", ""))
+                album = spotify_metadata.get("album", track.get("albumTitle", ""))
+                
+                print(f"   Using Spotify metadata: {artist_str} - {title}")
             else:
+                # Fallback to DAB metadata (shouldn't happen in practice)
                 artist_str = track.get("artist", "")
+                title = track.get("title", "")
+                album = track.get("albumTitle", "")
 
             # Set basic metadata
-            audio["TITLE"] = track.get("title", "")
+            audio["TITLE"] = title
             audio["ARTIST"] = artist_str
-            audio["ALBUM"] = track.get("albumTitle", "")
-            audio["DATE"] = track.get("releaseDate", "")
+            audio["ALBUM"] = album
+            audio["DATE"] = track.get("releaseDate", "")  # Keep DAB's release date
             audio["ISRC"] = isrc
 
+            # Keep DAB-specific fields
             if track.get("upc"):
                 audio["BARCODE"] = track["upc"]
 
@@ -377,6 +395,38 @@ class Downloader:
             # Assume direct audio file URL
             return "direct"
 
+    def try_smart_download(
+        self,
+        url: str,
+        format: str,
+        isrc: Optional[str] = None,
+        spotify_metadata: Optional[dict] = None,
+    ) -> bool:
+        """Try to download using smart download (ISRC → DAB Music).
+
+        Args:
+            url: Track URL (for ISRC lookup if needed)
+            format: Output format
+            isrc: Pre-fetched ISRC (optional, will lookup if not provided)
+            spotify_metadata: Pre-fetched Spotify metadata (optional)
+
+        Returns:
+            True if downloaded successfully, False if should fallback to source
+        """
+        # Use provided ISRC or look it up
+        if not isrc:
+            source_type = self.detect_source(url)
+            if source_type == "direct":
+                return False  # Skip smart download for direct URLs
+
+            isrc, spotify_metadata = self._lookup_isrc(url, source_type)
+
+        if isrc:
+            print(f"🔍 Found ISRC: {isrc}")
+            return self._try_dab_music(isrc, format, spotify_metadata)
+
+        return False
+
     def download(self, url: str, format: str = "auto"):
         """Download track(s) from URL.
 
@@ -390,26 +440,11 @@ class Downloader:
         print(f"📁 Output directory: {self.output_dir}")
         print()
 
-        # Skip ISRC/DAB for direct URLs (user already chose specific file)
-        if source_type != "direct":
-            # Try ISRC lookup and DAB Music download
-            isrc, spotify_metadata = self._lookup_isrc(url, source_type)
-
-            if isrc:
-                print(f"🔍 Found ISRC: {isrc}")
-                dab_success = self._try_dab_music(isrc, format, spotify_metadata)
-                if dab_success:
-                    return  # Successfully downloaded from DAB Music
-
-        # Fallback to original source
-        print(f"⬇️ Downloading from {source_type}...")
-        print()
-
-        # Route to appropriate handler
+        # Route to appropriate handler (handlers now manage smart downloads internally)
         if source_type == "spotify":
-            handler = spotify.SpotifyDownloader(self.config, self.output_dir)
+            handler = spotify.SpotifyDownloader(self.config, self.output_dir, self)
         elif source_type == "youtube":
-            handler = youtube.YouTubeDownloader(self.config, self.output_dir)
+            handler = youtube.YouTubeDownloader(self.config, self.output_dir, self)
         elif source_type == "soundcloud":
             handler = soundcloud.SoundCloudDownloader(self.config, self.output_dir)
         else:
@@ -424,6 +459,7 @@ class Downloader:
             self._log_failure(url, str(e))
             raise
 
+    def _log_failure(self, url: str, error: str):
         """Log failed download.
 
         Args:
