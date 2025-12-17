@@ -145,6 +145,14 @@ class DirectDownloader(BaseDownloader):
             if file_path != final_path:
                 file_path.rename(final_path)
 
+            # Add provenance metadata
+            self._add_provenance_metadata(
+                final_path,
+                url,
+                final_ext,
+                None,  # Bitrate unknown for direct downloads
+            )
+
             print(f"✅ Saved: {final_name}")
             return True
 

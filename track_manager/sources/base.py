@@ -1,13 +1,18 @@
 """Base downloader class with common functionality."""
 
+from __future__ import annotations
+
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from mutagen import File as MutagenFile
 
 from ..config import Config
+
+if TYPE_CHECKING:
+    from ..provenance import DownloadProvenance
 
 
 class BaseDownloader(ABC):
@@ -34,6 +39,112 @@ class BaseDownloader(ABC):
             format: Output format (auto, m4a, mp3)
         """
         pass
+
+    def _add_provenance_metadata(
+        self,
+        file_path: Path,
+        track_url: str,
+        original_format: str,
+        original_bitrate: Optional[int],
+        playlist_url: Optional[str] = None,
+    ):
+        """Add provenance metadata to downloaded file.
+
+        Args:
+            file_path: Path to audio file
+            track_url: Original track URL
+            original_format: Original audio format
+            original_bitrate: Original bitrate in kbps
+            playlist_url: Optional playlist URL
+        """
+        from ..provenance import DownloadProvenance
+
+        try:
+            # Determine source from class name
+            source = self.__class__.__name__.replace("Downloader", "").lower()
+
+            # Create provenance object
+            provenance = DownloadProvenance(
+                track_url=track_url,
+                playlist_url=playlist_url,
+                source=source,
+                original_format=original_format,
+                original_bitrate=original_bitrate,
+            )
+
+            # Apply to file based on format
+            if file_path.suffix == ".m4a":
+                self._apply_provenance_m4a(file_path, provenance)
+            elif file_path.suffix == ".mp3":
+                self._apply_provenance_mp3(file_path, provenance)
+
+        except Exception as e:
+            print(f"⚠️ Failed to add provenance metadata: {e}", file=sys.stderr)
+
+    def _apply_provenance_m4a(self, file_path: Path, provenance: DownloadProvenance):
+        """Apply provenance to M4A file.
+
+        Args:
+            file_path: Path to M4A file
+            provenance: Provenance information
+        """
+        from mutagen.mp4 import MP4
+
+        audio = MP4(str(file_path))
+
+        # Add provenance as freeform atoms
+        audio["----:com.apple.iTunes:TRACK_URL"] = provenance.track_url.encode("utf-8")
+        if provenance.playlist_url:
+            audio["----:com.apple.iTunes:PLAYLIST_URL"] = provenance.playlist_url.encode(
+                "utf-8"
+            )
+        audio["----:com.apple.iTunes:SOURCE"] = provenance.source.encode("utf-8")
+        audio["----:com.apple.iTunes:ORIGINAL_FORMAT"] = provenance.original_format.encode(
+            "utf-8"
+        )
+        if provenance.original_bitrate:
+            audio["----:com.apple.iTunes:ORIGINAL_BITRATE"] = str(
+                provenance.original_bitrate
+            ).encode("utf-8")
+
+        audio.save()
+
+    def _apply_provenance_mp3(self, file_path: Path, provenance: DownloadProvenance):
+        """Apply provenance to MP3 file.
+
+        Args:
+            file_path: Path to MP3 file
+            provenance: Provenance information
+        """
+        from mutagen.id3 import ID3, TXXX
+
+        try:
+            audio = ID3(str(file_path))
+        except:
+            from mutagen.id3 import ID3NoHeaderError
+
+            audio = ID3()
+
+        # Add provenance as TXXX frames (user-defined text)
+        audio.add(TXXX(encoding=3, desc="TRACK_URL", text=provenance.track_url))
+        if provenance.playlist_url:
+            audio.add(
+                TXXX(encoding=3, desc="PLAYLIST_URL", text=provenance.playlist_url)
+            )
+        audio.add(TXXX(encoding=3, desc="SOURCE", text=provenance.source))
+        audio.add(
+            TXXX(encoding=3, desc="ORIGINAL_FORMAT", text=provenance.original_format)
+        )
+        if provenance.original_bitrate:
+            audio.add(
+                TXXX(
+                    encoding=3,
+                    desc="ORIGINAL_BITRATE",
+                    text=str(provenance.original_bitrate),
+                )
+            )
+
+        audio.save(str(file_path))
 
     def extract_metadata(self, file_path: Path) -> Tuple[Optional[str], Optional[str]]:
         """Extract artist and title from audio file.

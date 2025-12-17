@@ -172,7 +172,7 @@ class SpotifyDownloader(BaseDownloader):
                         file_path = self._find_downloaded_file(song, audio_format)
 
                         if file_path and self._process_download(
-                            file_path, song, audio_format
+                            file_path, song, audio_format, playlist_url
                         ):
                             success += 1
                         else:
@@ -281,13 +281,16 @@ class SpotifyDownloader(BaseDownloader):
 
         return duplicates
 
-    def _process_download(self, file_path: Path, song: Song, format: str) -> bool:
+    def _process_download(
+        self, file_path: Path, song: Song, format: str, playlist_url: Optional[str] = None
+    ) -> bool:
         """Process a downloaded file.
 
         Args:
             file_path: Path to downloaded file
             song: Song object
             format: Desired format
+            playlist_url: Optional playlist URL if from a playlist
 
         Returns:
             True if successful
@@ -321,6 +324,16 @@ class SpotifyDownloader(BaseDownloader):
             # Rename if needed
             if file_path != final_path:
                 file_path.rename(final_path)
+
+            # Add provenance metadata
+            # Spotify via spotdl uses YouTube, so bitrate is typically 128kbps
+            self._add_provenance_metadata(
+                final_path,
+                song.url,
+                final_path.suffix[1:],  # Get format from file extension
+                128,  # Spotify via spotdl downloads at ~128kbps from YouTube
+                playlist_url,
+            )
 
             print(f"✅ Saved: {final_name}")
             return True

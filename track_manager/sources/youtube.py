@@ -35,7 +35,12 @@ class YouTubeDownloader(BaseDownloader):
         is_playlist = False
         playlist_entries = []
         
-        with yt_dlp.YoutubeDL({"extract_flat": True, "quiet": True}) as ydl:
+        # Detect if URL is a playlist (don't use extract_flat for detection)
+        with yt_dlp.YoutubeDL({
+            "quiet": True,
+            "noplaylist": False,  # Extract playlists even when video ID is present
+            "extract_flat": "in_playlist",  # Only flat-extract playlist entries
+        }) as ydl:
             try:
                 info = ydl.extract_info(url, download=False)
                 is_playlist = info.get("_type") == "playlist"
@@ -90,7 +95,7 @@ class YouTubeDownloader(BaseDownloader):
                     
                     # Fallback to yt-dlp
                     print("  ⬇️ Downloading from YouTube")
-                    if self._download_single_video(video_url, audio_format):
+                    if self._download_single_video(video_url, audio_format, playlist_url):
                         success += 1
                     else:
                         failed += 1
@@ -155,13 +160,13 @@ class YouTubeDownloader(BaseDownloader):
                                     f"[{idx}/{total}] Processing: {entry.get('title', 'Unknown')}"
                                 )
 
-                                if self._process_download(entry, audio_format):
+                                if self._process_download(entry, audio_format, playlist_url):
                                     success += 1
                                 else:
                                     failed += 1
                                 print()
                     else:
-                        if self._process_download(info, audio_format):
+                        if self._process_download(info, audio_format, playlist_url):
                             success += 1
                         else:
                             failed += 1
@@ -179,12 +184,15 @@ class YouTubeDownloader(BaseDownloader):
                     self.log_failure(url, str(e))
                     raise
 
-    def _download_single_video(self, video_url: str, audio_format: str) -> bool:
+    def _download_single_video(
+        self, video_url: str, audio_format: str, playlist_url: Optional[str] = None
+    ) -> bool:
         """Download a single video and process it.
 
         Args:
             video_url: URL of the video
             audio_format: Audio format (m4a or mp3)
+            playlist_url: Optional playlist URL if from a playlist
 
         Returns:
             True if successful, False if failed
@@ -208,17 +216,20 @@ class YouTubeDownloader(BaseDownloader):
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
-                return self._process_download(info, audio_format)
+                return self._process_download(info, audio_format, playlist_url)
         except Exception as e:
             print(f"  ⚠️ Download failed: {e}", file=sys.stderr)
             return False
 
-    def _process_download(self, info: dict, audio_format: str) -> bool:
+    def _process_download(
+        self, info: dict, audio_format: str, playlist_url: Optional[str] = None
+    ) -> bool:
         """Process a downloaded file.
 
         Args:
             info: Video info dict from yt-dlp
             audio_format: Audio format (m4a or mp3)
+            playlist_url: Optional playlist URL if from a playlist
 
         Returns:
             True if successful, False if failed
@@ -270,6 +281,16 @@ class YouTubeDownloader(BaseDownloader):
 
             # Move to final location
             temp_file.rename(final_path)
+            
+            # Add provenance metadata
+            self._add_provenance_metadata(
+                final_path,
+                info.get("webpage_url", ""),
+                info.get("ext", audio_format),
+                info.get("abr"),  # Average bitrate
+                playlist_url,
+            )
+            
             print(f"✅ Saved: {final_name}")
 
             return True
