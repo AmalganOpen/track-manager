@@ -29,11 +29,15 @@ class SoundCloudDownloader(YouTubeDownloader):
         # Match free tier quality (no Go+ credentials)
         ydl_opts = {
             "format": "bestaudio/best",
+            "writethumbnail": True,
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": audio_format,
                     "preferredquality": "128",  # Match SoundCloud free tier (~128kbps)
+                },
+                {
+                    "key": "EmbedThumbnail",
                 }
             ],
             "outtmpl": str(self.output_dir / ".tmp_%(id)s.%(ext)s"),

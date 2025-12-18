@@ -162,11 +162,15 @@ class YouTubeDownloader(BaseDownloader):
             # Original flow for single videos or when no parent downloader
             ydl_opts = {
                 "format": "251/140/bestaudio/best",
+                "writethumbnail": True,
                 "postprocessors": [
                     {
                         "key": "FFmpegExtractAudio",
                         "preferredcodec": audio_format,
                         "preferredquality": "192",
+                    },
+                    {
+                        "key": "EmbedThumbnail",
                     }
                 ],
                 "outtmpl": str(self.output_dir / ".tmp_%(id)s.%(ext)s"),
@@ -229,11 +233,15 @@ class YouTubeDownloader(BaseDownloader):
         """
         ydl_opts = {
             "format": "251/140/bestaudio/best",
+            "writethumbnail": True,
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": audio_format,
                     "preferredquality": "192",
+                },
+                {
+                    "key": "EmbedThumbnail",
                 }
             ],
             "outtmpl": str(self.output_dir / ".tmp_%(id)s.%(ext)s"),
@@ -264,7 +272,7 @@ class YouTubeDownloader(BaseDownloader):
         Returns:
             True if successful, False if failed
         """
-        try:
+        with self.temp_file_cleanup() as register_temp:
             # Find the downloaded file
             video_id = info.get("id")
             temp_file = None
@@ -280,51 +288,59 @@ class YouTubeDownloader(BaseDownloader):
                 print(f"⚠️ Downloaded file not found for {video_id}")
                 return False
 
-            # Extract metadata
-            artist, title = self.extract_metadata(temp_file)
+            # Register temp file for cleanup on error
+            register_temp(temp_file)
 
-            # Create final filename
-            if not artist or not title:
-                # Use video title as fallback
-                video_title = info.get("title", "unknown")
-                artist = info.get("uploader", "Unknown")
-                title = video_title
+            try:
+                # Extract metadata
+                artist, title = self.extract_metadata(temp_file)
 
-                # Flag for review
-                self.flag_metadata_review(
-                    temp_file,
-                    "Missing or incomplete metadata from YouTube",
-                    info.get("webpage_url", ""),
+                # Check if metadata is missing
+                missing_metadata = not artist or not title
+                
+                # Use fallbacks if needed
+                if missing_metadata:
+                    video_title = info.get("title", "unknown")
+                    artist = info.get("uploader", "Unknown")
+                    title = video_title
+
+                # Create final filename
+                final_name = self.create_filename(
+                    artist, title, audio_format, fallback=f"youtube-{video_id}"
                 )
+                final_path = self.output_dir / final_name
 
-            final_name = self.create_filename(
-                artist, title, audio_format, fallback=f"youtube-{video_id}"
-            )
-            final_path = self.output_dir / final_name
+                # Flag for review with final path (after rename)
+                if missing_metadata:
+                    self.flag_metadata_review(
+                        final_path,
+                        "Missing or incomplete metadata from YouTube",
+                        info.get("webpage_url", ""),
+                    )
 
-            # Check for duplicates
-            if self.check_duplicate(temp_file):
-                # User chose to skip
-                temp_file.unlink()
-                print("⏭️ Skipped (duplicate)")
+                # Check for duplicates
+                if self.check_duplicate(temp_file):
+                    # User chose to skip
+                    temp_file.unlink()
+                    print("⏭️ Skipped (duplicate)")
+                    return True
+
+                # Move to final location
+                temp_file.rename(final_path)
+                
+                # Add provenance metadata
+                self._add_provenance_metadata(
+                    final_path,
+                    info.get("webpage_url", ""),
+                    info.get("ext", audio_format),
+                    info.get("abr"),  # Average bitrate
+                    playlist_url,
+                )
+                
+                print(f"✅ Saved: {final_name}")
+
                 return True
 
-            # Move to final location
-            temp_file.rename(final_path)
-            
-            # Add provenance metadata
-            self._add_provenance_metadata(
-                final_path,
-                info.get("webpage_url", ""),
-                info.get("ext", audio_format),
-                info.get("abr"),  # Average bitrate
-                playlist_url,
-            )
-            
-            print(f"✅ Saved: {final_name}")
-
-            return True
-
-        except Exception as e:
-            print(f"⚠️ Error processing download: {e}", file=sys.stderr)
-            return False
+            except Exception as e:
+                print(f"⚠️ Error processing download: {e}", file=sys.stderr)
+                return False
