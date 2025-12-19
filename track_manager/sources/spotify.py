@@ -100,6 +100,10 @@ class SpotifyDownloader(BaseDownloader):
 
         try:
             # Get songs from URL
+            # Apply rate limiting before fetching playlist
+            from ..rate_limiter import spotify_rate_limit
+            spotify_rate_limit()
+            
             songs = self.spotdl.search([url])
 
             if not songs:
@@ -163,23 +167,20 @@ class SpotifyDownloader(BaseDownloader):
                             success += 1
                             continue
 
-                    # Fallback: Download song using spotdl
-                    print("  ⬇️ Downloading from YouTube (via spotdl)")
-                    result = self.spotdl.download(song)
-
-                    if result:
-                        # Find downloaded file
-                        file_path = self._find_downloaded_file(song, audio_format)
-
-                        if file_path and self._process_download(
-                            file_path, song, audio_format, playlist_url
+                    # Fallback: Download directly from YouTube using yt-dlp
+                    # This ensures we get format 251 (Opus) -> M4A conversion
+                    # instead of format 140 (native M4A at lower quality)
+                    if song.download_url:
+                        print(f"  ⬇️ Downloading from YouTube: {song.download_url}")
+                        if self._download_from_youtube(
+                            song, audio_format, playlist_url
                         ):
                             success += 1
                         else:
                             failed += 1
                     else:
-                        print("⚠️ Download failed")
-                        self.log_failure(song.url, "Download returned None")
+                        print("⚠️ No YouTube URL found")
+                        self.log_failure(song.url, "No download URL available")
                         failed += 1
 
                 except Exception as e:
@@ -291,6 +292,97 @@ class SpotifyDownloader(BaseDownloader):
         duplicates = find_duplicates(artist, title, self.output_dir)
 
         return duplicates
+
+    def _download_from_youtube(
+        self, song: Song, format: str, playlist_url: Optional[str] = None
+    ) -> bool:
+        """Download from YouTube using yt-dlp directly.
+        
+        This ensures we get format 251 (Opus ~160kbps, 20kHz) and convert to M4A
+        instead of getting format 140 (native M4A ~128kbps, 16kHz).
+        
+        Args:
+            song: Song object with download_url
+            format: Audio format (m4a or mp3)
+            playlist_url: Optional playlist URL
+            
+        Returns:
+            True if successful
+        """
+        import yt_dlp
+        
+        ydl_opts = {
+            "format": "251/140/bestaudio/best",
+            "writethumbnail": True,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": format,
+                    "preferredquality": "192",
+                },
+                {
+                    "key": "EmbedThumbnail",
+                }
+            ],
+            "outtmpl": str(self.output_dir / ".tmp_%(id)s.%(ext)s"),
+            "quiet": True,
+            "no_warnings": False,
+            "extract_flat": False,
+            "remote_components": ["ejs:github"],
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(song.download_url, download=True)
+                
+                # Find the downloaded file
+                video_id = info.get("id")
+                temp_file = None
+                
+                for ext in [format, "m4a", "mp3", "opus", "webm"]:
+                    potential_file = self.output_dir / f".tmp_{video_id}.{ext}"
+                    if potential_file.exists():
+                        temp_file = potential_file
+                        break
+                
+                if not temp_file or not temp_file.exists():
+                    print(f"⚠️ Downloaded file not found")
+                    return False
+                
+                # Use Spotify metadata (more reliable than YouTube)
+                artist = song.artist
+                title = song.name
+                
+                # Create final filename
+                final_name = self.create_filename(artist, title, format)
+                final_path = self.output_dir / final_name
+                
+                # Check for duplicates
+                if self.check_duplicate(temp_file):
+                    temp_file.unlink()
+                    print("⏭️ Skipped (duplicate)")
+                    return True
+                
+                # Move to final location
+                temp_file.rename(final_path)
+                
+                # Add provenance metadata
+                # When downloaded from YouTube via yt-dlp with format 251 -> M4A conversion
+                self._add_provenance_metadata(
+                    final_path,
+                    song.url,
+                    format,
+                    info.get("abr", 192),  # Use reported bitrate or default to 192
+                    playlist_url,
+                )
+                
+                print(f"✅ Saved: {final_name}")
+                return True
+                
+        except Exception as e:
+            print(f"⚠️ Download failed: {e}", file=sys.stderr)
+            self.log_failure(song.download_url, str(e))
+            return False
 
     def _process_download(
         self, file_path: Path, song: Song, format: str, playlist_url: Optional[str] = None
