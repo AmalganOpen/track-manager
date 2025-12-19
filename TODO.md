@@ -2,8 +2,13 @@
 
 ### High Priority
 
-- [ ] **Metadata handling** improve process of applying metadata
+- [ ] **Duplicate Detection**
+- Make sure all detectable duplicates are skipped
+- interactive mode working
+- Explore fuzzy matching
 - [ ] **Visual consitency** Make all download processes visually compatible
+- [ ] **Filename sanitization**
+- Apply sanitization also after applying user entered metadata with "track-manager apply-metadata"
 
 ### Medium Priority
 

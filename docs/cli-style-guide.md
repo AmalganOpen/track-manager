@@ -8,11 +8,11 @@ This document defines consistent patterns for all CLI output in track-manager.
 
 Use these emoji consistently across all output:
 
-- **Success:** ✅ (U+2705) - Always use this, not ✓
+- **Success:** ✅ (U+2705)
 - **Error:** ❌ (U+274C)
 - **Warning:** ⚠️ (U+26A0 + FE0F)
 - **Info:** ℹ️ (U+2139 + FE0F)
-- **Progress:** ⬇️ (U+2B07 + FE0F) for downloads
+- **Downloading:** ⬇️ (U+2B07 + FE0F)
 - **Search:** 🔍 (U+1F50D)
 - **Music:** 🎵 (U+1F3B5)
 - **Folder:** 📁 (U+1F4C1)
