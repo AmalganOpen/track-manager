@@ -46,7 +46,7 @@ class DABMusicClient:
             response = self.session.post(
                 f"{self.endpoint}/api/auth/login",
                 json={"email": email, "password": password},
-                timeout=10,
+                timeout=30,
             )
 
             if response.status_code == 401:
@@ -86,7 +86,7 @@ class DABMusicClient:
             response = session.get(
                 f"{self.endpoint}/api/search",
                 params={"q": isrc, "type": "track"},
-                timeout=10,
+                timeout=30,
             )
             response.raise_for_status()
 
@@ -130,7 +130,7 @@ class DABMusicClient:
             response = session.get(
                 f"{self.endpoint}/api/stream",
                 params={"trackId": track_id, "quality": quality},
-                timeout=10,
+                timeout=30,
             )
             response.raise_for_status()
 
@@ -144,7 +144,7 @@ class DABMusicClient:
 
             # Download audio file with rate limiting
             dab_rate_limit()
-            response = session.get(stream_url, timeout=60)
+            response = session.get(stream_url, timeout=120)
             response.raise_for_status()
 
             # Save to file
