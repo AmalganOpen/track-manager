@@ -20,11 +20,35 @@ def get_audio_info(file_path: Path) -> Optional[Dict]:
         if not audio:
             return None
 
+        # Get encoded bitrate as fallback
+        encoded_bitrate = getattr(audio.info, "bitrate", 0)
+        
+        # Check for provenance metadata (true source quality)
+        original_bitrate = None
+        if hasattr(audio, "tags") and audio.tags:
+            # Check for ORIGINAL_BITRATE tag (set by track-manager)
+            original_bitrate_tag = audio.tags.get("ORIGINAL_BITRATE") or audio.tags.get("----:com.apple.iTunes:ORIGINAL_BITRATE")
+            if original_bitrate_tag:
+                try:
+                    # Convert from "129.86" kbps string to bps integer
+                    if isinstance(original_bitrate_tag, (list, tuple)):
+                        original_bitrate_tag = original_bitrate_tag[0]
+                    if hasattr(original_bitrate_tag, 'decode'):
+                        original_bitrate_tag = original_bitrate_tag.decode('utf-8')
+                    original_bitrate = int(float(str(original_bitrate_tag)) * 1000)
+                except (ValueError, AttributeError):
+                    pass
+
+        # Use original bitrate if available (true quality), otherwise use encoded
+        bitrate = original_bitrate if original_bitrate else encoded_bitrate
+        
         info = {
             "file": file_path.name,
             "format": file_path.suffix.upper()[1:],  # .mp3 -> MP3
             "duration": getattr(audio.info, "length", 0),
-            "bitrate": getattr(audio.info, "bitrate", 0),
+            "bitrate": bitrate,
+            "encoded_bitrate": encoded_bitrate,  # Keep for comparison
+            "is_upsampled": original_bitrate is not None and original_bitrate < encoded_bitrate,
             "sample_rate": getattr(audio.info, "sample_rate", 0),
             "channels": getattr(audio.info, "channels", 0),
         }
@@ -165,15 +189,40 @@ def analyze_library(output_dir: Path, detailed: bool = False, verbose: bool = Fa
             print("📉 Lowest Quality Tracks (5 worst):")
             print(f"{'-' * 80}")
             for info in sorted_by_bitrate[:5]:
-                print(f"  {format_bitrate(info['bitrate']):>10} - {info['path']}")
+                bitrate_str = format_bitrate(info['bitrate'])
+                if info.get('is_upsampled'):
+                    bitrate_str += f" (encoded as {format_bitrate(info['encoded_bitrate'])})"
+                print(f"  {bitrate_str:>30} - {info['path']}")
             print()
             
             # Show best quality (highest bitrate)
             print("📈 Highest Quality Tracks (5 best):")
             print(f"{'-' * 80}")
             for info in sorted_by_bitrate[-5:][::-1]:  # Reverse to show highest first
-                print(f"  {format_bitrate(info['bitrate']):>10} - {info['path']}")
+                bitrate_str = format_bitrate(info['bitrate'])
+                if info.get('is_upsampled'):
+                    bitrate_str += f" (encoded as {format_bitrate(info['encoded_bitrate'])})"
+                print(f"  {bitrate_str:>30} - {info['path']}")
             print()
+            
+            # Show upsampled tracks
+            upsampled = [f for f in files_with_bitrate if f.get('is_upsampled')]
+            if upsampled:
+                print("⚠️  Upsampled Tracks (encoded higher than source):")
+                print(f"{'-' * 80}")
+                # Sort by difference (most upsampled first)
+                upsampled_sorted = sorted(
+                    upsampled,
+                    key=lambda x: x['encoded_bitrate'] - x['bitrate'],
+                    reverse=True
+                )
+                for info in upsampled_sorted[:10]:  # Show top 10
+                    source_rate = format_bitrate(info['bitrate'])
+                    encoded_rate = format_bitrate(info['encoded_bitrate'])
+                    print(f"  {source_rate:>10} → {encoded_rate:>10} - {info['path']}")
+                if len(upsampled) > 10:
+                    print(f"  ... and {len(upsampled) - 10} more upsampled tracks")
+                print()
 
     # Show detailed file list if requested
     if detailed:
