@@ -83,12 +83,18 @@ def cli(ctx):
 @click.option(
     "--output", "-o", type=click.Path(), help="Output directory (overrides config)"
 )
-def download(url: str, format: str, output: Optional[str]):
+@click.option(
+    "--dumb",
+    is_flag=True,
+    help="Disable smart downloads (download directly from source)",
+)
+def download(url: str, format: str, output: Optional[str], dumb: bool):
     """Download track(s) from URL.
 
     Supports: Spotify, YouTube, SoundCloud, and direct URLs.
 
-    Automatically downloads FLAC from DAB Music when available via ISRC lookup.
+    Automatically downloads FLAC from DAB Music when available via ISRC lookup
+    (unless --dumb is specified).
     """
     config = Config()
 
@@ -98,7 +104,7 @@ def download(url: str, format: str, output: Optional[str]):
     else:
         output_dir = config.output_dir
 
-    downloader = Downloader(config, output_dir)
+    downloader = Downloader(config, output_dir, dumb=dumb)
 
     try:
         downloader.download(url, format)

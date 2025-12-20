@@ -15,15 +15,17 @@ from .rate_limiter import spotify_rate_limit, dab_rate_limit
 class Downloader:
     """Main downloader class that routes to appropriate source handler."""
 
-    def __init__(self, config: Config, output_dir: Optional[Path] = None):
+    def __init__(self, config: Config, output_dir: Optional[Path] = None, dumb: bool = False):
         """Initialize downloader.
 
         Args:
             config: Configuration object
             output_dir: Override output directory
+            dumb: If True, disable smart downloads
         """
         self.config = config
         self.output_dir = output_dir or config.output_dir
+        self.dumb = dumb
 
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -396,6 +398,8 @@ class Downloader:
                 "aac",
                 "-b:a",
                 "256k",
+                "-ar",
+                "48000",  # Standard sample rate for DJ software compatibility
                 "-movflags",
                 "+faststart",
                 "-map_metadata",
@@ -545,6 +549,10 @@ class Downloader:
         Returns:
             True if downloaded successfully, False if should fallback to source
         """
+        # Skip smart download if dumb mode is enabled
+        if self.dumb:
+            return False
+        
         # Use provided ISRC or look it up
         if not isrc:
             source_type = self.detect_source(url)
