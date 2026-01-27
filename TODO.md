@@ -3,6 +3,7 @@
 ### High Priority
 
 - [ ] **Duplicate Detection** finish interactive mode
+- [ ] **FFmpeg** Check for ffmpeg installed
 - [ ] **Visual consitency** Make all download processes visually compatible
 - [ ] **Filename sanitization** Apply sanitization also after applying user entered metadata with "track-manager apply-metadata"
 
