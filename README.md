@@ -17,20 +17,6 @@ Download tracks from **Spotify, YouTube, SoundCloud, or direct URLs** with autom
 
 ## Installation
 
-### Using pipx (NOT IMPLEMENTED)
-
-```bash
-# Install pipx if not available
-python3 -m pip install --user pipx
-python3 -m pipx ensurepath
-
-# Install track-manager
-pipx install git+https://github.com/AmalganOpen/track-manager.git
-
-# Initialize config
-track-manager init
-```
-
 ### From Source (For Development)
 
 ```bash
@@ -44,29 +30,6 @@ pip install -e .
 pip3 install -e .
 ```
 
-### Using pip
-
-```bash
-# Install directly from GitHub
-pip install git+https://github.com/AmalganOpen/track-manager.git
-
-# Initialize config
-track-manager init
-```
-
-### Using uv (Fast Alternative)
-
-```bash
-# Install uv if not available
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install track-manager
-uv pip install git+https://github.com/AmalganOpen/track-manager.git
-
-# Initialize config
-track-manager init
-```
-
 ## Setup
 
 ### Basic Setup (No Credentials Required)
@@ -76,36 +39,33 @@ Track Manager works immediately for:
 - ✅ **YouTube** - No setup needed
 - ✅ **SoundCloud** - No setup needed
 - ✅ **Direct URLs** - No setup needed
+- ❌ **Spotify** - Setup needed
+
+## Configuration
+
+Track Manager uses a config file at `config.yaml` in the project root. Copy `config.example.yaml` to `config.yaml` and customize it.
+
+Config location: `./track_manager/config.yaml`
+
+You can customize:
+
+- Output directory
+- Download format preferences (M4A, MP3)
+- Duplicate handling behavior
+- Spotify credentials
+- And more...
+
+See `config.example.yaml` for all available options.
 
 ### Spotify Setup (Optional)
 
-Spotify downloads require API credentials. Choose one method:
+Spotify downloads require API credentials.
+Get credentials from: https://developer.spotify.com/dashboard
+(Create an app → Copy Client ID & Secret)
 
-#### Option 1: Environment Variables (Quick)
-
-```bash
-# Get credentials from: https://developer.spotify.com/dashboard
-# (Create an app → Copy Client ID & Secret)
-
-export SPOTIPY_CLIENT_ID="your_client_id"
-export SPOTIPY_CLIENT_SECRET="your_client_secret"
-
-# Make permanent (add to ~/.bashrc or ~/.zshrc):
-echo 'export SPOTIPY_CLIENT_ID="your_client_id"' >> ~/.bashrc
-echo 'export SPOTIPY_CLIENT_SECRET="your_client_secret"' >> ~/.bashrc
-```
-
-#### Option 2: Config File (Permanent)
-
-```bash
-# Edit the config file created by track-manager init
-# Location: ~/.config/track-manager/config.yaml
-
-# Add your credentials:
-spotdl:
-  client_id: "your_client_id"
-  client_secret: "your_client_secret"
-```
+Update config.yaml
+SPOTIPY_CLIENT_ID="your_client_id"
+SPOTIPY_CLIENT_SECRET="your_client_secret"
 
 ## Quick Start
 
@@ -141,22 +101,6 @@ track-manager check-setup
 # Get help
 track-manager --help
 ```
-
-## Configuration
-
-Track Manager uses sensible defaults. The config file is created automatically when you run `track-manager init`.
-
-Config location: `~/.config/track-manager/config.yaml`
-
-You can customize:
-
-- Output directory
-- Download format preferences (M4A, MP3)
-- Duplicate handling behavior
-- Spotify credentials
-- And more...
-
-See `config.example.yaml` for all available options.
 
 ## Supported Sources
 
@@ -196,12 +140,10 @@ Track Manager always downloads at the **best available quality** - no configurat
 ### Technical Details
 
 - **Spotify**: Uses spotdl with `bitrate: "320k"` setting
-
   - MP3: 320 kbps constant bitrate
   - M4A/AAC: 256 kbps (comparable quality to 320 kbps MP3)
 
 - **YouTube**: Explicitly requests high-quality audio formats
-
   - Format 251: Opus codec at ~160 kbps (preferred)
   - Format 140: M4A/AAC at ~128 kbps (fallback)
   - Avoids low-quality formats (249: ~50 kbps)
@@ -259,17 +201,6 @@ Failed downloads are logged to `failed-downloads.txt` with timestamps and error 
 **Problem:** "Error: No Spotify credentials found"
 
 **Solution:** Spotify downloads require API credentials. See the [Spotify Setup](#spotify-setup-optional) section above for detailed instructions.
-
-Quick fix:
-
-```bash
-# Set environment variables
-export SPOTIPY_CLIENT_ID="your_client_id"
-export SPOTIPY_CLIENT_SECRET="your_client_secret"
-
-# Or edit config file
-nano ~/.config/track-manager/config.yaml
-```
 
 Get credentials from: https://developer.spotify.com/dashboard
 
