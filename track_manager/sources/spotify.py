@@ -54,11 +54,7 @@ class SpotifyDownloader(BaseDownloader):
                 file=sys.stderr,
             )
             print("🔧 Setup options:\n", file=sys.stderr)
-            print("   1. Run: track-manager init", file=sys.stderr)
-            print(
-                "      Then edit: ~/.config/track-manager/config.yaml\n",
-                file=sys.stderr,
-            )
+            print("   1. Edit config.yaml in the project root\n", file=sys.stderr)
             print("   2. Or set environment variables:", file=sys.stderr)
             print("      export SPOTIPY_CLIENT_ID='your_id'", file=sys.stderr)
             print("      export SPOTIPY_CLIENT_SECRET='your_secret'\n", file=sys.stderr)

@@ -1,6 +1,5 @@
 """Command-line interface for track-manager."""
 
-import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -278,56 +277,6 @@ def rate_stats():
         click.echo(f"   Tokens available: {data['tokens_available']}/{data['burst_size']}")
         click.echo(f"   Rate limit: {data['rate']:.2f} calls/sec")
         click.echo()
-
-
-@cli.command()
-def init():
-    """Initialize configuration file in ~/.config/track-manager/."""
-    config_dir = Path.home() / ".config" / "track-manager"
-    config_path = config_dir / "config.yaml"
-
-    if config_path.exists():
-        click.echo(f"✅ Config already exists: {config_path}")
-        click.echo()
-        click.echo("To reconfigure, either:")
-        click.echo(f"  1. Edit: {config_path}")
-        click.echo(f"  2. Delete and run 'track-manager init' again")
-        return
-
-    # Create config directory
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    # Copy example config
-    example = Path(__file__).parent.parent / "config.example.yaml"
-    if not example.exists():
-        click.echo(f"❌ Example config not found at {example}", err=True)
-        click.echo("This might happen with certain installation methods.", err=True)
-        click.echo()
-        click.echo("Manually create config.yaml with:", err=True)
-        click.echo(f"  mkdir -p {config_dir}", err=True)
-        click.echo(
-            f"  curl https://raw.githubusercontent.com/AmalganOpen/track-manager/main/config.example.yaml -o {config_path}",
-            err=True,
-        )
-        sys.exit(1)
-
-    shutil.copy(example, config_path)
-
-    click.echo(f"✅ Created config: {config_path}")
-    click.echo()
-    click.echo("📝 Configuration:")
-    click.echo("  - YouTube/SoundCloud: Works immediately, no setup needed")
-    click.echo("  - Spotify: Requires API credentials (optional)")
-    click.echo()
-    click.echo("🔑 To enable Spotify downloads:")
-    click.echo("  1. Get credentials: https://developer.spotify.com/dashboard")
-    click.echo("     (Create app → Copy Client ID & Secret)")
-    click.echo(f"  2. Option A - Edit config: {config_path}")
-    click.echo("  3. Option B - Set environment variables:")
-    click.echo("     export SPOTIPY_CLIENT_ID='your_id'")
-    click.echo("     export SPOTIPY_CLIENT_SECRET='your_secret'")
-    click.echo()
-    click.echo("✅ Ready! Try: track-manager download <url>")
 
 
 def main():
