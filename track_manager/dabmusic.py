@@ -105,6 +105,10 @@ class DABMusicClient:
         except requests.RequestException as e:
             print(f"⚠️ DAB Music search failed: {e}", file=sys.stderr)
             return None
+        except (ValueError, KeyError) as e:
+            # JSON parsing errors or missing keys
+            print(f"⚠️ DAB Music search failed: {e}", file=sys.stderr)
+            return None
 
     def download_track(
         self, track_id: int, output_path: Path, quality: int = 27
@@ -157,5 +161,9 @@ class DABMusicClient:
             return True
 
         except requests.RequestException as e:
+            print(f"❌ DAB Music download failed: {e}", file=sys.stderr)
+            return False
+        except (ValueError, KeyError) as e:
+            # JSON parsing errors or missing keys
             print(f"❌ DAB Music download failed: {e}", file=sys.stderr)
             return False
