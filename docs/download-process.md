@@ -6,12 +6,14 @@ This document explains the complete download workflow in track-manager, from URL
 
 track-manager uses a quality-first approach with automatic fallback:
 
-1. **ISRC Lookup** - Find universal track identifier
-2. **DAB Music Search** - Try to get lossless FLAC
+1. **Source Detection** - Identify platform (Spotify, YouTube, SoundCloud, etc.)
+2. **TIDAL Public API** - Try to get lossless FLAC (no credentials required)
 3. **FLAC Conversion** - Convert to efficient M4A 256kbps
-4. **Fallback** - Use original source if DAB unavailable
-5. **Metadata** - Apply comprehensive tags + cover art
+4. **Fallback** - Use original source if TIDAL unavailable
+5. **Metadata** - Apply comprehensive tags + cover art (including ISRC from TIDAL)
 6. **Organization** - Clean naming and placement
+
+**Legacy Note:** Previously, track-manager used DAB Music for high-quality downloads, which required account credentials. DAB Music service became unavailable in early 2026. The system now uses TIDAL's public API, which requires no credentials and provides the same lossless FLAC quality. DAB Music configuration is kept in the config file for potential future use if the service returns.
 
 ## Command Flow
 
@@ -23,47 +25,41 @@ track-manager download <url>
 
 **Supported Sources:**
 
-- Spotify (best ISRC success rate)
-- YouTube (via song.link → Spotify)
-- SoundCloud (via song.link → Spotify)
-- Direct audio URLs (no ISRC)
+- **Spotify tracks** - Work without credentials (via TIDAL)
+- **Spotify playlists/albums** - Require Spotify API credentials (optional)
+- **YouTube** - No credentials needed (via TIDAL)
+- **SoundCloud** - No credentials needed (via TIDAL)
+- **Direct audio URLs** - No credentials needed
+
+**No Setup Required** - Works immediately for all sources except Spotify playlists
 
 ## Complete Download Flow
 
 ### High-Level Flow
 
 **1. Input**
-
 - URL from any supported platform
 
 **2. Source Detection**
-
 - Detect: Spotify / YouTube / SoundCloud / Direct
 
-**3. ISRC Lookup**
-
-- Spotify → Direct Spotify API
-- Others → song.link → Spotify API
-- Result: ISRC code (or None)
-
-**4a. DAB Music Path (if ISRC found)**
-
-- Search DAB Music by ISRC
+**3. Smart Download (TIDAL Public API)**
+- URL → song.link → TIDAL ID
+- TIDAL Public API → Track info (includes ISRC + metadata)
 - If found: Download FLAC → Convert to M4A 256kbps → Apply metadata → Delete FLAC
 - If not found: Continue to fallback
 
-**4b. Fallback Path (if no ISRC or not on DAB)**
-
-- YouTube → yt-dlp (M4A ~160kbps, format 251/140)
-- Spotify → spotdl (M4A ~160kbps, format 251/140)
-- SoundCloud → yt-dlp (M4A ~128kbps)
+**4. Fallback Path (if not on TIDAL)**
+- YouTube → yt-dlp (M4A ~130kbps, format 140)
+- Spotify (with credentials) → spotdl → YouTube (M4A ~130kbps)
+- Spotify (without credentials) → Try TIDAL via smart download
+- SoundCloud → yt-dlp (M4A ~256kbps)
 - Direct → requests (preserve original)
 
 **5. Final Output**
-
 - File: `Artist - Title.m4a`
 - Location: Output directory (flat structure)
-- Quality: Best available (DAB Music preferred, fallback acceptable)
+- Quality: Best available (TIDAL FLAC preferred, fallback acceptable)
 
 ### 1. Source Detection
 
@@ -80,138 +76,152 @@ def detect_source(url: str) -> str:
 ```
 
 **Detected:**
-
 - `spotify` - Spotify URLs
 - `youtube` - YouTube URLs (including youtu.be short links)
 - `soundcloud` - SoundCloud URLs
 - `direct` - Everything else (assumes direct audio URL)
 
-### 2. ISRC Lookup
+### 2. Spotify API Handling (Optional)
 
-#### Tier 1: Direct from Spotify
+**Spotify API is only required for playlists/albums:**
 
-**For Spotify URLs:**
-
+#### With Spotify Credentials
 ```python
-# Extract Spotify track ID
-spotify_id = extract_from_url("https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp")
-# spotify_id = "3n3Ppam7vgaVa1iaRUc9Lp"
+# For playlists/albums - enumerate tracks
+songs = spotdl.search([playlist_url])
 
-# Query Spotify API
-track_data = spotify_api.track(spotify_id)
-isrc = track_data['external_ids']['isrc']
-# isrc = "GBFFP0300052"
+# Each song has metadata including ISRC
+for song in songs:
+    isrc = song.isrc  # Provided directly from Spotify
+    # Try TIDAL smart download first, fallback to YouTube
+    try_smart_download(song.url, isrc=isrc, spotify_metadata={...})
 ```
 
-**Requirements:**
-
-- Spotify API credentials (client_id, client_secret)
-- Set via environment variables or config file
-
-#### Tier 2: Via song.link
-
-**For Non-Spotify URLs:**
-
+#### Without Spotify Credentials
 ```python
-# Query song.link to find Spotify match
-songlink_data = songlink_api.find_platforms(youtube_url)
-spotify_url = songlink_data.get('spotify')
-
-if spotify_url:
-    # Extract Spotify ID and get ISRC (same as Tier 1)
-    spotify_id = extract_from_url(spotify_url)
-    isrc = spotify_api.track(spotify_id)['external_ids']['isrc']
+# Individual tracks - route through TIDAL
+if is_playlist:
+    print("❌ Spotify playlists require API credentials")
+    print("Individual tracks work without credentials (via TIDAL)")
+    return
+else:
+    # Use smart download (song.link → TIDAL)
+    success = try_smart_download(url)
+    if not success:
+        print("❌ Failed via TIDAL, Spotify API needed")
 ```
 
-(requires song.link to find Spotify match)
-
-**How it works:**
-
-1. song.link searches for track across platforms
-2. Returns Spotify URL if found
-3. We query Spotify API for ISRC
-4. Works for YouTube, SoundCloud, Apple Music, etc.
-
-#### Tier 3: No ISRC
-
-**When ISRC lookup fails:**
-
-- No Spotify match found via song.link
-- Track not on Spotify
-- No ISRC in Spotify metadata (rare)
-
-**Result:** Skip DAB Music, go directly to original source fallback
-
-### 3. DAB Music Integration
-
-#### Authentication
-
-```python
-# Check credentials
-email = config.dabmusic_email
-password = config.dabmusic_password
-
-if not email or password:
-    print("ℹ️ DAB Music credentials not configured, skipping")
-    return False  # Fall back to original source
-
-# Login
-client = DABMusicClient(email, password)
-# Session cookie stored automatically
+**Setup (optional - only for playlists):**
+```bash
+export SPOTIPY_CLIENT_ID="your_id"
+export SPOTIPY_CLIENT_SECRET="your_secret"
 ```
 
-#### Search by ISRC
+Or add to `config.yaml`:
+```yaml
+spotdl:
+  client_id: "your_id"
+  client_secret: "your_secret"
+```
+
+### 3. TIDAL Public API Integration
+
+#### song.link Lookup
+
+**For any URL:**
+```python
+# Convert any platform URL to TIDAL ID
+response = requests.get(f"https://api.song.link/v1-alpha.1/links?url={url}")
+data = response.json()
+tidal_url = data['linksByPlatform']['tidal']['url']
+
+# Extract TIDAL ID
+tidal_id = tidal_url.split('/')[-1]
+# Example: "450756447"
+```
+
+**Supported conversions:**
+- Spotify → TIDAL
+- YouTube → TIDAL
+- Apple Music → TIDAL
+- SoundCloud → TIDAL
+- Deezer → TIDAL
+- And more...
+
+#### Get Track Info
 
 ```python
-# Search DAB Music for track with this ISRC
-track_data = client.search_by_isrc(isrc)
+# Query TIDAL public API (one of multiple endpoints)
+endpoint = "https://api.monochrome.tf"  # Primary endpoint
 
-if not track_data:
-    print("ℹ️ Track not found on DAB Music")
-    return False  # Fall back to original source
+response = requests.get(
+    f"{endpoint}/info/",
+    params={"id": tidal_id},
+    timeout=30
+)
 
-# Verify ISRC matches (safety check)
-if track_data['isrc'] != isrc:
-    print("⚠️ ISRC mismatch")
-    return False
+track_data = response.json()['data']
 ```
 
 **What we get:**
-
 ```python
 {
-    'id': 40398780,
+    'id': 450756447,
     'title': 'Mr. Brightside',
-    'artist': 'The Killers',
-    'albumTitle': 'Hot Fuss',
-    'albumCover': 'https://...',
-    'releaseDate': '2004-09-27',
+    'artists': [{'name': 'The Killers'}],
+    'album': {
+        'title': 'Hot Fuss',
+        'cover': 'cover-id-string'
+    },
     'isrc': 'GBFFP0300052',
-    'upc': '...',
-    'label': '...'
+    'streamStartDate': '2004-09-27T00:00:00.000+0000'
 }
 ```
+
+**Key benefits over legacy DAB Music:**
+- ✅ No credentials required
+- ✅ ISRC included in response (no separate lookup needed)
+- ✅ Multiple public endpoints (automatic fallback)
+- ✅ Works with any platform URL via song.link
+- ✅ Community-maintained infrastructure
+- ✅ Same lossless FLAC quality
 
 #### Download FLAC
 
 ```python
-# Generate output path
-output_path = output_dir / f"{artist} - {title}.flac"
-
-# Download FLAC (quality=27 for FLAC, quality=5 for MP3)
-success = client.download_track(
-    track_id=track_data['id'],
-    output_path=output_path,
-    quality=27  # FLAC
+# Download from TIDAL public API
+response = requests.get(
+    f"{endpoint}/track/",
+    params={
+        "id": tidal_id,
+        "quality": "LOSSLESS"  # 16-bit/44.1kHz, or "HI_RES_LOSSLESS" for 24-bit
+    },
+    timeout=30
 )
+
+manifest = response.json()
+download_url = manifest['urls'][0]  # First CDN URL
+
+# Download FLAC file
+flac_response = requests.get(download_url, timeout=120)
+output_path.write_bytes(flac_response.content)
 ```
 
-**Result:** FLAC file (~30-40MB)
-
+**Result:** FLAC file (~30-40MB per track)
 - Format: FLAC lossless
 - Bitrate: ~1411kbps (CD quality)
 - Sample rate: 44.1kHz
 - Bit depth: 16-bit
+- Includes all metadata tags
+
+**Public API Endpoints:**
+The system uses multiple community-hosted TIDAL endpoints with automatic fallback:
+- `https://api.monochrome.tf` (primary)
+- `https://triton.squid.wtf`
+- `https://wolf.qqdl.site`
+- `https://tidal-api.binimum.org`
+
+If one endpoint fails, the system automatically tries the next one.
 
 ### 4. Metadata Application
 
@@ -222,99 +232,148 @@ from mutagen.flac import FLAC, Picture
 
 audio = FLAC(flac_path)
 
-# Text metadata
-audio['TITLE'] = 'Mr. Brightside'
-audio['ARTIST'] = 'The Killers'
-audio['ALBUM'] = 'Hot Fuss'
-audio['DATE'] = '2004-09-27'
-audio['ISRC'] = 'GBFFP0300052'
-audio['BARCODE'] = '...'  # UPC/EAN
-audio['LABEL'] = 'Island Records'
+# Prefer Spotify metadata when available (from playlists)
+# Spotify has better multi-artist support
+if spotify_metadata:
+    audio['TITLE'] = spotify_metadata['title']
+    audio['ARTIST'] = ', '.join(spotify_metadata['artists'])
+    audio['ALBUM'] = spotify_metadata['album']
+    audio['DATE'] = spotify_metadata['date']
+else:
+    # Use TIDAL metadata as fallback
+    artists = [a['name'] for a in track_data['artists']]
+    audio['TITLE'] = track_data['title']
+    audio['ARTIST'] = ', '.join(artists)
+    audio['ALBUM'] = track_data['album']['title']
+    audio['DATE'] = track_data['streamStartDate'].split('T')[0]
 
-# Cover art
-cover_data = download(track_data['albumCover'])
+# ISRC always from TIDAL (authoritative source)
+audio['ISRC'] = track_data['isrc']
+
+# Cover art from TIDAL CDN
+cover_id = track_data['album']['cover']
+cover_path = cover_id.replace('-', '/')  # Convert to path format
+cover_url = f"https://resources.tidal.com/images/{cover_path}/1280x1280.jpg"
+
+cover_data = requests.get(cover_url).content
 picture = Picture()
 picture.type = 3  # Cover (front)
 picture.data = cover_data
 picture.mime = 'image/jpeg'
+picture.width = 1280
+picture.height = 1280
 audio.add_picture(picture)
 
 audio.save()
 ```
+
+**Metadata priority:**
+1. **Spotify metadata** (when from playlist) - Better multi-artist handling, consistent titles
+2. **TIDAL metadata** (fallback) - Still high quality and complete
+3. **ISRC** - Always from TIDAL (most authoritative)
+4. **Cover art** - Always from TIDAL CDN (high resolution)
 
 ### 5. FLAC → M4A Conversion
 
 #### Extract Cover Art
 
 ```python
-# Read FLAC and extract cover art
+# Read FLAC and extract cover art for re-embedding
 flac_audio = FLAC(flac_path)
 cover_data = flac_audio.pictures[0].data if flac_audio.pictures else None
 ```
 
-#### Convert Audio
+#### Convert Audio with FFmpeg
 
 ```python
-# FFmpeg conversion
-ffmpeg -i input.flac \
-    -vn \                    # Skip video/cover art
-    -c:a aac \               # AAC codec
-    -b:a 256k \              # 256kbps bitrate
-    -movflags +faststart \   # Optimize for streaming
-    -map_metadata 0 \        # Copy metadata
-    -y \                     # Overwrite
-    output.m4a
+# FFmpeg conversion preserving quality
+subprocess.run([
+    'ffmpeg',
+    '-i', str(flac_path),
+    '-vn',                    # Skip video/cover art (prevents H.264 encoding)
+    '-c:a', 'aac',           # AAC codec
+    '-b:a', '256k',          # 256kbps bitrate (transparent from FLAC)
+    '-movflags', '+faststart', # Optimize for streaming
+    '-map_metadata', '0',    # Copy all metadata
+    '-y',                    # Overwrite if exists
+    str(m4a_path)
+], check=True)
 ```
 
 **Settings:**
+- **Codec:** AAC (Advanced Audio Coding) - Universal compatibility
+- **Bitrate:** 256kbps constant - Transparent quality from FLAC
+- **Sample rate:** 44.1kHz (preserved from FLAC)
+- **Channels:** Stereo
+- **Optimization:** Fast-start enabled for streaming/DJ software
 
-- Codec: AAC (Advanced Audio Coding)
-- Bitrate: 256kbps constant
-- Sample rate: 44.1kHz (preserved from FLAC)
-- Channels: Stereo
-
-**Result:** M4A file (~6-7MB)
-
+**Result:** M4A file (~6-7MB per track)
 - 80% smaller than FLAC
-- Transparent quality
-- Universal compatibility
+- Transparent quality (imperceptible from lossless)
+- Universal compatibility (all DJ software, players, devices)
+- Optimized for streaming and quick loading
 
 #### Re-embed Cover Art
 
 ```python
 # Embed cover art into M4A
+# (FFmpeg's -vn skips cover art to prevent codec issues)
 from mutagen.mp4 import MP4, MP4Cover
 
 m4a_audio = MP4(m4a_path)
-m4a_audio['covr'] = [MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)]
+if cover_data:
+    m4a_audio['covr'] = [MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)]
 m4a_audio.save()
 ```
 
 **Why re-embed:**
-
-- FFmpeg's `-vn` flag skips cover art (prevents H.264 encoding issues)
+- FFmpeg's `-vn` flag skips cover art (prevents H.264 video encoding issues)
 - We extract cover art before conversion
 - Re-embed after conversion using mutagen
-- Ensures cover art is properly stored in M4A container
+- Ensures cover art is properly stored in M4A container (not as video track)
+
+#### Add Provenance Metadata
+
+```python
+# Track source quality for transparency
+m4a_audio['----:com.apple.iTunes:ORIGINAL_BITRATE'] = b'1411'
+m4a_audio['----:com.apple.iTunes:SOURCE'] = b'TIDAL FLAC'
+m4a_audio.save()
+```
+
+**Why track provenance:**
+- Shows true source quality (1411kbps FLAC, not 256kbps encoding)
+- Prevents misleading quality assessments
+- Useful for `track-manager check-quality` command
+- Documents the download source
 
 #### Cleanup
 
 ```python
-# Delete FLAC file
+# Delete FLAC file (keep only optimized M4A)
 flac_path.unlink()
 
-# Keep only M4A
 print(f"✅ Downloaded and converted to M4A: {m4a_path}")
 ```
 
 ### 6. Fallback to Original Source
 
-**When DAB Music fails (no ISRC, not found, or error):**
+**When TIDAL download fails:**
+- Track not found on TIDAL (via song.link)
+- TIDAL API error (all endpoints failed)
+- Conversion error
+
+**Fallback routing:**
 
 ```python
-# Route to appropriate handler
+# Route to appropriate source handler
 if source_type == "spotify":
-    handler = SpotifyDownloader(config, output_dir)
+    if has_spotify_credentials():
+        handler = SpotifyDownloader(config, output_dir)
+    else:
+        print("❌ Track not available via TIDAL")
+        print("   Spotify API credentials needed")
+        return
 elif source_type == "youtube":
     handler = YouTubeDownloader(config, output_dir)
 elif source_type == "soundcloud":
@@ -328,222 +387,71 @@ handler.download(url, format)
 #### YouTube Fallback (via yt-dlp)
 
 **Process:**
+```python
+# yt-dlp with format preference
+ydl_opts = {
+    'format': '140/251/bestaudio',  # M4A AAC → Opus → Best
+    'outtmpl': str(output_dir / '%(title)s.%(ext)s'),
+}
 
-- Downloads directly from YouTube
-- Format preference: 251 (Opus) → 140 (M4A)
-- Converts to M4A if needed
-- Output: M4A ~160kbps (251) or ~128kbps (140)
+with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    ydl.download([url])
+```
+
+**Quality:**
+- Format 140: M4A ~130kbps AAC (YouTube's actual audio quality)
+- Format 251: Opus ~160kbps container (~130kbps actual quality)
+- Native M4A preferred (no conversion needed)
+
+**Result:** M4A ~130kbps (matches YouTube's source quality)
 
 #### Spotify Fallback (via spotdl)
 
 **Process:**
+```python
+# spotdl uses Spotify API for metadata, YouTube for audio
+from spotdl import Spotdl
 
-- Same as for YouTube
+spotdl = Spotdl(client_id=..., client_secret=...)
+songs = spotdl.search([url])
+
+for song in songs:
+    spotdl.download(song)
+```
+
+**What happens:**
+1. Spotify API → Get track metadata (artist, title, album, ISRC)
+2. YouTube search → Find matching audio
+3. yt-dlp → Download from YouTube (~130kbps)
+4. Apply Spotify metadata to file
+
+**Quality:** M4A ~130kbps (same as YouTube, but better metadata)
+
+**Note:** Spotify doesn't provide direct audio downloads. spotdl searches YouTube for the track and downloads from there. This is why the audio quality matches YouTube's actual quality (~130kbps), not Spotify's streaming quality (320kbps).
 
 #### SoundCloud Fallback (via yt-dlp)
 
 **Process:**
+```python
+# yt-dlp with SoundCloud extractor
+ydl_opts = {
+    'format': 'bestaudio',
+    'outtmpl': str(output_dir / '%(title)s.%(ext)s'),
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'm4a',
+        'preferredquality': '256',
+    }],
+}
+```
 
-- Downloads from SoundCloud
-- Free tier quality only
-- Output: M4A ~128kbps
+**Quality:**
+- Free SoundCloud: ~128kbps source
+- SoundCloud Go+: ~256kbps source
+- Converted to M4A 256kbps (encoding bitrate to avoid double compression)
+
+**Result:** M4A ~256kbps (quality limited by source)
 
 ## File Naming & Organization
 
 ### Filename Format
-
-Artist - Title.m4a
-
-**Sanitization:**
-
-- Unsafe characters replaced with `-`
-- Characters: `/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`
-- Leading/trailing spaces and dots removed
-- Maximum length: 255 characters
-
-**Examples:**
-Original: "Artist / Name: Song (Official)"
-Sanitized: "Artist - Name- Song (Official).m4a"
-
-Original: "Track: The Song"
-Sanitized: "Track- The Song.m4a"
-
-### All Files Saved to Same Directory
-
-**No subfolders:**
-
-- All tracks in single output directory
-- Flat structure for DJ library
-- Easy to browse and search
-- Consistent with DJ software expectations
-
-**Output Location:**
-
-- Default: From config (`output_dir`)
-- Override: `--output <path>` flag
-
-## Duplicate Detection
-
-### Detection Strategy
-
-**Compares:**
-
-- Artist name (normalized, case-insensitive)
-- Track title (normalized, case-insensitive)
-
-**Works across formats:**
-
-- M4A vs MP3
-- FLAC vs M4A
-- Any combination
-
-**Example:**
-Existing: "The Killers - Mr. Brightside.m4a"
-New download: "The Killers - Mr. Brightside.flac"
-Result: Detected as duplicate ✓
-
-### Handling Duplicates
-
-When duplicate detected:
-
-- System prompts for action
-- Options: Skip, Keep both, Replace
-
-**Remixes and versions NOT flagged:**
-
-- "Song (Original Mix)" vs "Song (Remix)"
-- Different titles = different tracks
-- Correct behavior for DJ library
-
-## Error Handling
-
-### Failed Downloads
-
-**Logged to:** `failed-downloads.txt`
-
-**Format:**
-2025-12-15 15:45 | https://... | Error message
-
-**Process continues:**
-
-- Individual failures don't stop batch downloads
-- Each track processed independently
-- Summary shows success/failed counts
-
-### Common Errors
-
-**1. No ISRC Found**
-
-- Message: "ℹ️ No ISRC found, downloading from original source"
-- Behavior: Falls back to Spotify/YouTube/SoundCloud
-- Not a failure - system works as designed
-
-**2. Track Not on DAB Music**
-
-- Message: "ℹ️ Track not found on DAB Music"
-- Behavior: Falls back to original source
-- Common for new releases or obscure tracks
-
-**3. DAB Music Credentials Not Configured**
-
-- Message: "ℹ️ DAB Music credentials not configured, skipping"
-- Behavior: Falls back to original source immediately
-- Solution: Configure credentials in config.yaml
-
-**4. FFmpeg Conversion Failed**
-
-- Message: "⚠️ FFmpeg conversion failed"
-- Behavior: Keeps FLAC file, doesn't delete
-- Check: Ensure FFmpeg is installed
-
-**5. Spotify API Credentials Missing**
-
-- Message: ISRC lookup will fail for Spotify URLs
-- Behavior: Falls back to original source
-- Solution: Set SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET
-
-### Retry Failed Downloads
-
-```bash
-# View failed downloads
-cat ~/path/to/failed-downloads.txt
-
-# Retry specific URL
-track-manager download <url>
-```
-
-## Summary
-
-### Complete Workflow
-
-1. **Detect source** → Spotify, YouTube, SoundCloud, or direct
-2. **Find ISRC** → Spotify API or song.link → Spotify
-3. **Try DAB Music** → Search by ISRC, download FLAC
-4. **Convert** → FLAC → M4A 256kbps with FFmpeg
-5. **Apply metadata** → Title, artist, album, date, ISRC, cover art
-6. **Cleanup** → Delete FLAC, keep M4A
-7. **Fallback** → Original source if DAB unavailable
-8. **Organize** → Clean filename, single directory
-9. **Check duplicates** → Prevent redundant storage
-
-### Quality Results
-
-**With DAB Music:**
-
-- Format: M4A 256kbps (from FLAC lossless)
-- Size: ~6.3 MB per track
-- Quality: Transparent (imperceptible from lossless)
-- Coverage: ~80% of tracks (with ISRC)
-
-**Without DAB Music:**
-
-- Format: M4A 128-192kbps (source-dependent)
-- Size: ~4-5 MB per track
-- Quality: Good streaming quality
-- Coverage: 100% (always works)
-
-### Key Benefits
-
-1. **Automatic Quality Upgrade** - ISRC-based FLAC sourcing
-2. **Universal Compatibility** - M4A works everywhere
-3. **Efficient Storage** - 80% smaller than FLAC
-4. **Reliable Fallback** - Always gets the track
-5. **Clean Organization** - Professional file naming
-6. **No Manual Work** - Fully automatic process
-
-### For Users
-
-**What you provide:**
-
-- URL from any supported platform
-- DAB Music credentials (optional but recommended)
-
-**What you get:**
-
-- Best quality available (FLAC → M4A 256kbps when possible)
-- Comprehensive metadata + cover art
-- Clean filename: `Artist - Title.m4a`
-- Automatic fallback if needed
-- Duplicate detection
-- Error logging for failed downloads
-
-**Just works** - The system handles all complexity automatically.
-
-## Special Case: Direct URLs
-
-For direct audio URLs (e.g., `https://example.com/audio.mp3`), the system skips ISRC lookup and DAB Music search:
-
-**Why?**
-
-- User has already found the specific file they want
-- Direct URLs rarely have ISRC metadata
-- No point searching for alternative sources
-- Faster download process
-
-**Behavior:**
-
-- Direct URLs → Download immediately as-is
-- No ISRC lookup
-- No DAB Music search
-- No format conversion
-- Original quality preserved exactly
