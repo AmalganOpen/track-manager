@@ -348,6 +348,14 @@ class Downloader:
         Returns:
             Dictionary of metadata to apply
         """
+        # Extract cover URL from TIDAL (always use TIDAL's cover art)
+        cover_url = None
+        if track.get("album", {}).get("cover"):
+            cover_id = track["album"]["cover"]
+            # TIDAL cover art URL pattern: replace dashes with slashes
+            cover_path = cover_id.replace("-", "/")
+            cover_url = f"https://resources.tidal.com/images/{cover_path}/1280x1280.jpg"
+        
         # Prefer Spotify metadata over TIDAL when available
         if spotify_metadata:
             return {
@@ -356,6 +364,7 @@ class Downloader:
                 "album": spotify_metadata.get("album"),
                 "date": spotify_metadata.get("date"),
                 "isrc": track.get("isrc"),  # Always use TIDAL's ISRC
+                "cover_url": cover_url,  # Always use TIDAL's cover art
             }
         
         # Use TIDAL metadata as fallback
@@ -372,6 +381,7 @@ class Downloader:
             "album": track.get("album", {}).get("title"),
             "date": track.get("streamStartDate", "").split("T")[0] if track.get("streamStartDate") else None,
             "isrc": track.get("isrc"),
+            "cover_url": cover_url,
         }
 
     def _collect_dab_metadata(
