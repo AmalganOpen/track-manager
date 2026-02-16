@@ -6,12 +6,12 @@ Download tracks from **Spotify, YouTube, SoundCloud, or direct URLs** with autom
 
 ## Features
 
-- 🎯 **Universal Source Support** - Spotify, YouTube, SoundCloud, direct URLs
-- 🎵 **High-Quality Downloads** - Automatic FLAC from TIDAL (no credentials required)
+- 🎯 **Universal Platform Support** - Works with ANY music platform (Spotify, Apple Music, YouTube, SoundCloud, Deezer, Amazon Music, TIDAL, etc.)
+- 🎵 **High-Quality Downloads** - Automatic FLAC from TIDAL via song.link (no credentials required)
 - 🔍 **Smart Duplicate Detection** - Works across formats (M4A vs MP3)
 - 📝 **Metadata Management** - CSV-based review and correction workflow
 - 🤝 **Interactive Prompts** - Asks what to do when duplicates found
-- 📊 **Playlist Support** - Handles playlists/albums with progress tracking
+- 📊 **Playlist Support** - YouTube, SoundCloud, and Spotify playlists (Spotify requires API credentials)
 - 🔄 **Error Resilience** - Logs failed downloads, continues on errors
 - 🎚️ **Best Quality** - Lossless FLAC (16-bit/44.1kHz) when available, converted to M4A 256kbps
 - 🌍 **Cross-Platform** - Works on macOS, Linux, Windows
@@ -53,13 +53,14 @@ pip3 install -e .
 
 ### Basic Setup (No Credentials Required)
 
-Track Manager works immediately for most sources:
+**Individual tracks** work for ANY platform (Apple Music, YouTube, SoundCloud, Deezer, Amazon Music, TIDAL, etc.):
+- ✅ Converted via song.link → TIDAL for high-quality FLAC
+- ✅ No credentials needed
 
-- ✅ **YouTube** - No setup needed
-- ✅ **SoundCloud** - No setup needed  
-- ✅ **Direct URLs** - No setup needed
-- ✅ **Spotify tracks** - No setup needed (downloads via TIDAL)
-- ⚠️ **Spotify playlists/albums** - Requires API credentials (see below)
+**Playlists** only work for:
+- ✅ **YouTube playlists** - No setup needed
+- ✅ **SoundCloud playlists** - No setup needed
+- ⚠️ **Spotify playlists** - Requires API credentials (see below)
 
 ### Spotify API Setup (Optional - Only for Playlists)
 

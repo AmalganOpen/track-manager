@@ -691,8 +691,16 @@ class Downloader:
         elif "soundcloud.com" in domain:
             return "soundcloud"
         else:
-            # Assume direct audio file URL
-            return "direct"
+            # Check if it looks like a direct audio file URL
+            parsed_path = parsed.path.lower()
+            audio_extensions = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac', '.opus', '.wma']
+            
+            if any(parsed_path.endswith(ext) for ext in audio_extensions):
+                return "direct"
+            else:
+                # Unknown platform URL (Apple Music, Deezer, Amazon Music, etc.)
+                # Will attempt smart download via song.link → TIDAL
+                return "unknown"
 
     def try_smart_download(
         self,
@@ -795,8 +803,27 @@ class Downloader:
             handler = youtube.YouTubeDownloader(self.config, self.output_dir, self)
         elif source_type == "soundcloud":
             handler = soundcloud.SoundCloudDownloader(self.config, self.output_dir)
-        else:
+        elif source_type == "unknown":
+            # Unrecognized platform (Apple Music, Deezer, etc.)
+            # Try smart download via song.link → TIDAL
+            print("🔍 Unknown platform, attempting smart download via TIDAL...")
+            print()
+            success = self.try_smart_download(url, format)
+            if success:
+                return  # Success, we're done
+            else:
+                print("❌ Platform not recognized and not found on TIDAL", file=sys.stderr)
+                print("   Supported: Spotify, YouTube, SoundCloud, or direct audio URLs", file=sys.stderr)
+                self._log_failure(url, "Unknown platform, not available via TIDAL")
+                return  # Don't create garbage files
+        elif source_type == "direct":
+            # Only for confirmed direct audio file URLs
             handler = direct.DirectDownloader(self.config, self.output_dir)
+        else:
+            # Should never reach here, but handle gracefully
+            print(f"❌ Unsupported source type: {source_type}", file=sys.stderr)
+            self._log_failure(url, f"Unsupported source type: {source_type}")
+            return
 
         # Download
         try:
