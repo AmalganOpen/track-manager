@@ -49,12 +49,6 @@ dev = [
 track-manager = "track_manager.cli:main"
 tm = "track_manager.cli:main"
 
-[project.urls]
-Homepage = "https://github.com/AmalganOpen/track-manager"
-Documentation = "https://github.com/AmalganOpen/track-manager#readme"
-Repository = "https://github.com/AmalganOpen/track-manager"
-Issues = "https://github.com/AmalganOpen/track-manager/issues"
-
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["track_manager*"]
