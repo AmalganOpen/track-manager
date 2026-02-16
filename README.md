@@ -7,26 +7,45 @@ Download tracks from **Spotify, YouTube, SoundCloud, or direct URLs** with autom
 ## Features
 
 - 🎯 **Universal Source Support** - Spotify, YouTube, SoundCloud, direct URLs
+- 🎵 **High-Quality Downloads** - Automatic FLAC from TIDAL (no credentials required)
 - 🔍 **Smart Duplicate Detection** - Works across formats (M4A vs MP3)
 - 📝 **Metadata Management** - CSV-based review and correction workflow
 - 🤝 **Interactive Prompts** - Asks what to do when duplicates found
 - 📊 **Playlist Support** - Handles playlists/albums with progress tracking
 - 🔄 **Error Resilience** - Logs failed downloads, continues on errors
-- 🎚️ **Best Quality** - Always downloads best available bitrate
+- 🎚️ **Best Quality** - Lossless FLAC (16-bit/44.1kHz) when available, converted to M4A 256kbps
 - 🌍 **Cross-Platform** - Works on macOS, Linux, Windows
+
+## How It Works
+
+Track Manager uses a **smart download system** to get the best quality audio:
+
+1. **Any URL** (Spotify, YouTube, etc.) → song.link lookup
+2. **TIDAL Public API** → Downloads lossless FLAC (16-bit/44.1kHz)
+   - ✅ No credentials required
+   - ✅ Works with community-hosted endpoints
+   - ✅ Includes full metadata and cover art
+3. **Automatic conversion** → M4A 256kbps AAC (preserves quality, better compatibility)
+4. **Fallback** → If not on TIDAL, downloads from original source
+
+**Quality comparison:**
+- TIDAL FLAC: 1411 kbps lossless → converted to M4A 256 kbps
+- YouTube: ~130 kbps → M4A 128 kbps (matches source quality)
+- SoundCloud: ~128 kbps → M4A 256 kbps
+
+**Legacy note:** DAB Music was previously used for high-quality downloads but is currently unavailable. The configuration is kept for potential future use if the service returns.
 
 ## Installation
 
 ### From Source (For Development)
 
 ```bash
-# Clone the repository
-git clone https://github.com/AmalganOpen/track-manager.git
+# Navigate to the track-manager directory
 cd track-manager
 
 # Install the package
 pip install -e .
-#or
+# or
 pip3 install -e .
 ```
 
@@ -34,38 +53,51 @@ pip3 install -e .
 
 ### Basic Setup (No Credentials Required)
 
-Track Manager works immediately for:
+Track Manager works immediately for most sources:
 
 - ✅ **YouTube** - No setup needed
-- ✅ **SoundCloud** - No setup needed
+- ✅ **SoundCloud** - No setup needed  
 - ✅ **Direct URLs** - No setup needed
-- ❌ **Spotify** - Setup needed
+- ✅ **Spotify tracks** - No setup needed (downloads via TIDAL)
+- ⚠️ **Spotify playlists/albums** - Requires API credentials (see below)
+
+### Spotify API Setup (Optional - Only for Playlists)
+
+**Spotify API credentials are optional:**
+- ✅ **Individual Spotify track URLs work without credentials** (downloaded via TIDAL)
+- ⚠️ **Playlist/album URLs require Spotify API** to enumerate tracks
+
+**To enable Spotify playlist support:**
+
+1. Get credentials from: https://developer.spotify.com/dashboard
+   (Create an app → Copy Client ID & Secret)
+
+2. Set environment variables:
+   ```bash
+   export SPOTIPY_CLIENT_ID="your_client_id"
+   export SPOTIPY_CLIENT_SECRET="your_client_secret"
+   ```
+
+3. Or add to `config.yaml`:
+   ```yaml
+   spotdl:
+     client_id: "your_client_id"
+     client_secret: "your_client_secret"
+   ```
 
 ## Configuration
 
 Track Manager uses a config file at `config.yaml` in the project root. Copy `config.example.yaml` to `config.yaml` and customize it.
-
-Config location: `./track_manager/config.yaml`
 
 You can customize:
 
 - Output directory
 - Download format preferences (M4A, MP3)
 - Duplicate handling behavior
-- Spotify credentials
+- Spotify credentials (optional)
 - And more...
 
 See `config.example.yaml` for all available options.
-
-### Spotify Setup (Optional)
-
-Spotify downloads require API credentials.
-Get credentials from: https://developer.spotify.com/dashboard
-(Create an app → Copy Client ID & Secret)
-
-Update config.yaml
-SPOTIPY_CLIENT_ID="your_client_id"
-SPOTIPY_CLIENT_SECRET="your_client_secret"
 
 ## Quick Start
 
@@ -187,7 +219,7 @@ When a duplicate is found, you'll be prompted to:
 When metadata is missing or problematic, tracks are flagged for manual review:
 
 1. Download script flags tracks with issues
-2. Edit `tracks-metadata-review.csv` (in repo root) to fill in correct metadata
+2. Edit `tracks-metadata-review.csv` (in project directory) to fill in correct metadata
 3. Run `track-manager apply-metadata` to update files
 
 ## Error Handling
@@ -249,7 +281,7 @@ Get credentials from: https://developer.spotify.com/dashboard
 
 **Solution:**
 
-1. Check `tracks-metadata-review.csv` in the track-manager repo root
+1. Check `tracks-metadata-review.csv` in the track-manager directory
 2. Fill in correct artist and title for flagged tracks
 3. Run: `track-manager apply-metadata`
 
@@ -300,7 +332,7 @@ If you encounter other issues:
 
 1. Check `failed-downloads.txt` for error details
 2. Run `track-manager check-setup` to verify installation
-3. Search [existing issues](https://github.com/AmalganOpen/track-manager/issues)
+3. Check the documentation for known issues
 4. Open a new issue with:
    - Command you ran
    - Full error message
@@ -311,7 +343,6 @@ If you encounter other issues:
 For development, install with dev dependencies:
 
 ```bash
-git clone https://github.com/AmalganOpen/track-manager.git
 cd track-manager
 pip install -e ".[dev]"
 

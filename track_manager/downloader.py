@@ -30,6 +30,24 @@ class Downloader:
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
+    def _has_spotify_credentials(self) -> bool:
+        """Check if Spotify API credentials are available.
+        
+        Returns:
+            True if both client_id and client_secret are configured
+        """
+        import os
+        
+        client_id = os.getenv("SPOTIPY_CLIENT_ID", "")
+        client_secret = os.getenv("SPOTIPY_CLIENT_SECRET", "")
+        
+        if not client_id:
+            client_id = self.config.get("spotdl.client_id", "")
+        if not client_secret:
+            client_secret = self.config.get("spotdl.client_secret", "")
+        
+        return bool(client_id and client_secret)
+        
         # Cache DAB Music client (created lazily on first use)
         self._dab_client = None
 
@@ -700,26 +718,24 @@ class Downloader:
         if self.dumb:
             return False
         
-        # Use provided ISRC or look it up
-        if not isrc:
-            source_type = self.detect_source(url)
-            if source_type == "direct":
-                return False  # Skip smart download for direct URLs
-
-            isrc, spotify_metadata = self._lookup_isrc(url, source_type)
-
+        # Note: ISRC parameter is only used when provided by Spotify playlists
+        # For individual URLs, we use song.link → TIDAL which provides ISRC
         if isrc:
-            print(f"🔍 Found ISRC: {isrc}")
+            print(f"🔍 Using ISRC from Spotify: {isrc}")
+        
+        # Skip smart download for direct audio URLs
+        source_type = self.detect_source(url)
+        if source_type == "direct":
+            return False
         
         # Try public TIDAL API (no credentials required)
+        # TIDAL will get metadata from song.link, no Spotify API needed
         return self._try_tidal_public(
             url,
             format,
             spotify_metadata,
             playlist_url=playlist_url,
         )
-
-        return False
 
     def download(self, url: str, format: str = "auto"):
         """Download track(s) from URL.
@@ -736,6 +752,44 @@ class Downloader:
 
         # Route to appropriate handler (handlers now manage smart downloads internally)
         if source_type == "spotify":
+            # Check if Spotify credentials are available
+            if not self._has_spotify_credentials():
+                # Determine if it's a playlist/album or single track
+                is_playlist = "/playlist/" in url or "/album/" in url
+                
+                if is_playlist:
+                    print("❌ Spotify playlists/albums require API credentials", file=sys.stderr)
+                    print("\n📝 Spotify API credentials are optional but needed for playlists:", file=sys.stderr)
+                    print("   • Individual Spotify tracks work without credentials (via TIDAL)", file=sys.stderr)
+                    print("   • Playlists/albums require Spotify API setup\n", file=sys.stderr)
+                    print("🔧 To enable Spotify playlist support:", file=sys.stderr)
+                    print("   1. Get credentials from: https://developer.spotify.com/dashboard", file=sys.stderr)
+                    print("   2. Set environment variables:", file=sys.stderr)
+                    print("      export SPOTIPY_CLIENT_ID='your_id'", file=sys.stderr)
+                    print("      export SPOTIPY_CLIENT_SECRET='your_secret'", file=sys.stderr)
+                    print("   3. Or add to config.yaml:", file=sys.stderr)
+                    print("      spotdl:", file=sys.stderr)
+                    print("        client_id: 'your_id'", file=sys.stderr)
+                    print("        client_secret: 'your_secret'\n", file=sys.stderr)
+                    self._log_failure(url, "Spotify playlist requires API credentials")
+                    return
+                else:
+                    # Single track - download via TIDAL (song.link)
+                    print("ℹ️ Spotify API not configured, downloading via TIDAL")
+                    print("   (For playlist support, add Spotify API credentials)")
+                    print()
+                    
+                    # Try smart download directly (bypasses Spotify handler)
+                    success = self.try_smart_download(url, format)
+                    if success:
+                        return
+                    else:
+                        print("❌ Failed to download via TIDAL", file=sys.stderr)
+                        print("   Spotify API credentials needed for this track", file=sys.stderr)
+                        self._log_failure(url, "TIDAL download failed, Spotify API needed")
+                        return
+            
+            # If we get here, we have Spotify credentials
             handler = spotify.SpotifyDownloader(self.config, self.output_dir, self)
         elif source_type == "youtube":
             handler = youtube.YouTubeDownloader(self.config, self.output_dir, self)

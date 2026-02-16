@@ -10,11 +10,13 @@ failed_log: "~/Music/tm/failed-downloads.txt"
 # Metadata review CSV file
 
 
-# Spotdl configuration (for Spotify downloads)
+# Spotdl configuration (OPTIONAL - only needed for Spotify playlists/albums)
+# Individual Spotify track URLs work without credentials (downloaded via TIDAL)
 spotdl:
   # Spotify API credentials (get from https://developer.spotify.com/dashboard)
   # Preferably set as environment variables: SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET
   # Or set them here (but keep config.yaml out of version control!)
+  # Leave empty if you don't need Spotify playlist support
   client_id: ""
   client_secret: ""
 
@@ -23,9 +25,12 @@ spotdl:
   # Alternative: Use a specific Python environment
   # path: "/Users/username/.pyenv/versions/3.12.7/envs/spotdl-env/bin/spotdl"
 
-# DAB Music (for high-quality FLAC downloads)
+# DAB Music (LEGACY - currently unused)
+# Note: DAB Music service is currently unavailable
+# High-quality FLAC downloads now use public TIDAL API (no credentials required)
+# These settings are kept for potential future use if DAB Music service returns
 dabmusic:
-  # Get account from https://dabmusic.xyz
+  # Get account from https://dabmusic.xyz (if service returns)
   email: ""
   password: ""
   endpoint: "https://dabmusic.xyz"
