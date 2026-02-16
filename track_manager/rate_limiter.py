@@ -97,6 +97,7 @@ class RateLimiter:
 _spotify_limiter = RateLimiter(calls_per_second=1.0, burst_size=3)
 _songlink_limiter = RateLimiter(calls_per_second=0.15, burst_size=2)  # ~9/min, conservative
 _dab_limiter = RateLimiter(calls_per_second=2.0, burst_size=5)
+_tidal_limiter = RateLimiter(calls_per_second=2.0, burst_size=5)  # Conservative for public APIs
 
 
 import sys
@@ -129,10 +130,20 @@ def dab_rate_limit(show_progress: bool = False) -> None:
     _dab_limiter.acquire()
 
 
+def tidal_rate_limit(show_progress: bool = False) -> None:
+    """Apply TIDAL API rate limiting."""
+    if show_progress:
+        stats = _tidal_limiter.get_stats()
+        if stats['tokens_available'] < 1:
+            print("⏳ Rate limiting active (TIDAL API)...", file=sys.stderr)
+    _tidal_limiter.acquire()
+
+
 def get_rate_limit_stats() -> dict:
     """Get statistics for all rate limiters."""
     return {
         'spotify': _spotify_limiter.get_stats(),
         'songlink': _songlink_limiter.get_stats(),
-        'dab_music': _dab_limiter.get_stats()
+        'dab_music': _dab_limiter.get_stats(),
+        'tidal': _tidal_limiter.get_stats()
     }

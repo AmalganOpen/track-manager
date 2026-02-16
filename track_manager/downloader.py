@@ -237,6 +237,143 @@ class Downloader:
             print(f"⚠️ DAB Music error: {e}", file=sys.stderr)
             return False
 
+    def _try_tidal_public(
+        self,
+        url: str,
+        format: str,
+        spotify_metadata: Optional[dict] = None,
+        playlist_url: Optional[str] = None,
+    ) -> bool:
+        """Try to download from public TIDAL API (no credentials required).
+
+        Args:
+            url: Track URL (any platform)
+            format: Output format
+            spotify_metadata: Optional Spotify metadata
+            playlist_url: Playlist URL if from a playlist
+
+        Returns:
+            True if successful, False otherwise
+        """
+        from .provenance import DownloadProvenance
+        from .tidal_public import TidalPublicClient
+
+        try:
+            # Create client
+            if not hasattr(self, '_tidal_client'):
+                self._tidal_client = TidalPublicClient()
+            
+            client = self._tidal_client
+
+            print("🎵 Looking up track on TIDAL...")
+            
+            # Get TIDAL ID from URL via song.link
+            tidal_id = client.get_tidal_id_from_url(url)
+            
+            if not tidal_id:
+                print("ℹ️ Track not found on TIDAL")
+                return False
+
+            # Get track info
+            track = client.get_track_info(tidal_id)
+            
+            if not track:
+                print("ℹ️ Could not get track info from TIDAL")
+                return False
+
+            print(f"✅ Found on TIDAL: {track['title']} by {track['artist']['name']}")
+            
+            # Generate output path using existing naming convention
+            from .metadata import sanitize_filename
+
+            # Use Spotify metadata for filename (same as file metadata)
+            if spotify_metadata:
+                artist = ", ".join(spotify_metadata["artists"]) if spotify_metadata.get("artists") else track["artist"]["name"]
+                title = spotify_metadata.get("title", track["title"])
+            else:
+                artist = track["artist"]["name"]
+                title = track["title"]
+
+            artist = sanitize_filename(artist)
+            title = sanitize_filename(title)
+            output_path = self.output_dir / f"{artist} - {title}.flac"
+
+            # Download FLAC
+            success = client.download_track(tidal_id, output_path, quality="LOSSLESS")
+
+            if success:
+                # Create provenance information
+                provenance = DownloadProvenance(
+                    track_url=url,
+                    playlist_url=playlist_url,
+                    source="tidal-public",
+                    original_format="flac",
+                    original_bitrate=None,  # FLAC is lossless
+                )
+                
+                # Collect all metadata (use TIDAL data as fallback)
+                metadata = self._collect_tidal_metadata(track, spotify_metadata)
+                
+                # Convert FLAC to M4A and apply all metadata at once
+                m4a_path = self._convert_to_m4a(output_path, metadata, provenance)
+                if m4a_path:
+                    print(f"✅ Downloaded and converted to M4A: {m4a_path}")
+                    print()
+                    return True
+                else:
+                    # Conversion failed, but FLAC is still there
+                    print(f"✅ Downloaded FLAC (conversion failed): {output_path}")
+                    print()
+                    return True
+            else:
+                print("❌ TIDAL download failed", file=sys.stderr)
+                print()
+                return False
+
+        except Exception as e:
+            print(f"⚠️ TIDAL error: {e}", file=sys.stderr)
+            return False
+
+    def _collect_tidal_metadata(
+        self,
+        track: dict,
+        spotify_metadata: Optional[dict] = None,
+    ) -> dict:
+        """Collect metadata from TIDAL download.
+
+        Args:
+            track: Track data from TIDAL
+            spotify_metadata: Spotify metadata (preferred source for all metadata)
+
+        Returns:
+            Dictionary of metadata to apply
+        """
+        # Prefer Spotify metadata over TIDAL when available
+        if spotify_metadata:
+            return {
+                "title": spotify_metadata.get("title"),
+                "artist": ", ".join(spotify_metadata["artists"]) if spotify_metadata.get("artists") else None,
+                "album": spotify_metadata.get("album"),
+                "date": spotify_metadata.get("date"),
+                "isrc": track.get("isrc"),  # Always use TIDAL's ISRC
+            }
+        
+        # Use TIDAL metadata as fallback
+        # Handle both single artist and multiple artists
+        artists = track.get("artists", [])
+        if artists:
+            artist = ", ".join([a["name"] for a in artists])
+        else:
+            artist = track.get("artist", {}).get("name")
+        
+        return {
+            "title": track.get("title"),
+            "artist": artist,
+            "album": track.get("album", {}).get("title"),
+            "date": track.get("streamStartDate", "").split("T")[0] if track.get("streamStartDate") else None,
+            "isrc": track.get("isrc"),
+        }
+
     def _collect_dab_metadata(
         self,
         track: dict,
@@ -563,13 +700,14 @@ class Downloader:
 
         if isrc:
             print(f"🔍 Found ISRC: {isrc}")
-            return self._try_dab_music(
-                isrc,
-                format,
-                spotify_metadata,
-                track_url=url,
-                playlist_url=playlist_url,
-            )
+        
+        # Try public TIDAL API (no credentials required)
+        return self._try_tidal_public(
+            url,
+            format,
+            spotify_metadata,
+            playlist_url=playlist_url,
+        )
 
         return False
 
