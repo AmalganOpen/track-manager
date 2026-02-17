@@ -2,12 +2,10 @@
 
 Universal music downloader with smart duplicate detection and metadata management.
 
-Download tracks from **Spotify, YouTube, SoundCloud, or direct URLs** with automatic source detection, duplicate prevention, and metadata handling.
-
 ## Features
 
 - 🎯 **Universal Platform Support** - Works with ANY music platform (Spotify, Apple Music, YouTube, SoundCloud, Deezer, Amazon Music, TIDAL, etc.)
-- 🎵 **High-Quality Downloads** - Automatic FLAC from TIDAL via song.link (no credentials required)
+- 🎵 **High-Quality Downloads** - Automatic FLAC from TIDAL proxy
 - 🔍 **Smart Duplicate Detection** - Works across formats (M4A vs MP3)
 - 📝 **Metadata Management** - CSV-based review and correction workflow
 - 🤝 **Interactive Prompts** - Asks what to do when duplicates found
@@ -20,18 +18,18 @@ Download tracks from **Spotify, YouTube, SoundCloud, or direct URLs** with autom
 
 Track Manager uses a **smart download system** to get the best quality audio:
 
-1. **Any URL** (Spotify, YouTube, etc.) → song.link lookup
-2. **TIDAL Public API** → Downloads lossless FLAC (16-bit/44.1kHz)
+1. **Any URL** (Spotify, YouTube, etc.) → song.link API lookup
+2. **TIDAL proxy API** → Downloads lossless FLAC (16-bit/44.1kHz)
    - ✅ No credentials required
-   - ✅ Works with community-hosted endpoints
    - ✅ Includes full metadata and cover art
 3. **Automatic conversion** → M4A 256kbps AAC (preserves quality, better compatibility)
-4. **Fallback** → If not on TIDAL, downloads from original source
+4. **Fallback** → If not on TIDAL, downloads from from youtube or soundcloud
 
 **Quality comparison:**
+
 - TIDAL FLAC: 1411 kbps lossless → converted to M4A 256 kbps
-- YouTube: ~130 kbps → M4A 128 kbps (matches source quality)
-- SoundCloud: ~128 kbps → M4A 256 kbps
+- YouTube: ~128 kbps M4A
+- SoundCloud: ~128 kbps → M4A 256 kbps (for less lossy conversion)
 
 **Legacy note:** DAB Music was previously used for high-quality downloads but is currently unavailable. The configuration is kept for potential future use if the service returns.
 
@@ -54,10 +52,12 @@ pip3 install -e .
 ### Basic Setup (No Credentials Required)
 
 **Individual tracks** work for ANY platform (Apple Music, YouTube, SoundCloud, Deezer, Amazon Music, TIDAL, etc.):
+
 - ✅ Converted via song.link → TIDAL for high-quality FLAC
 - ✅ No credentials needed
 
 **Playlists** only work for:
+
 - ✅ **YouTube playlists** - No setup needed
 - ✅ **SoundCloud playlists** - No setup needed
 - ⚠️ **Spotify playlists** - Requires API credentials (see below)
@@ -65,21 +65,18 @@ pip3 install -e .
 ### Spotify API Setup (Optional - Only for Playlists)
 
 **Spotify API credentials are optional:**
+
 - ✅ **Individual Spotify track URLs work without credentials** (downloaded via TIDAL)
 - ⚠️ **Playlist/album URLs require Spotify API** to enumerate tracks
 
 **To enable Spotify playlist support:**
 
-1. Get credentials from: https://developer.spotify.com/dashboard
+1. Copy `config.example.yaml` to `config.yaml`
+
+2. Get credentials from: https://developer.spotify.com/dashboard
    (Create an app → Copy Client ID & Secret)
 
-2. Set environment variables:
-   ```bash
-   export SPOTIPY_CLIENT_ID="your_client_id"
-   export SPOTIPY_CLIENT_SECRET="your_client_secret"
-   ```
-
-3. Or add to `config.yaml`:
+3. add to `config.yaml`:
    ```yaml
    spotdl:
      client_id: "your_client_id"
@@ -88,7 +85,7 @@ pip3 install -e .
 
 ## Configuration
 
-Track Manager uses a config file at `config.yaml` in the project root. Copy `config.example.yaml` to `config.yaml` and customize it.
+Track Manager uses a config file at `config.yaml` in the project root.
 
 You can customize:
 
@@ -107,19 +104,12 @@ See `config.example.yaml` for all available options.
 ```bash
 # Download from Spotify
 track-manager download "https://open.spotify.com/track/..."
+```
+
+or just
+
+```bash
 tm "https://open.spotify.com/track/..."
-
-# Download from YouTube
-track-manager download "https://www.youtube.com/watch?v=..."
-tm "https://www.youtube.com/watch?v=..."
-
-# Download from SoundCloud
-track-manager download "https://soundcloud.com/artist/track"
-tm "https://soundcloud.com/artist/track"
-
-# Download from direct URL
-track-manager download "https://example.com/audio.mp3"
-tm "https://example.com/audio.mp3"
 ```
 
 ### Manage Your Library
@@ -135,70 +125,16 @@ track-manager check-setup
 track-manager --help
 ```
 
-## Supported Sources
-
-### Spotify
-
-- Tracks: `https://open.spotify.com/track/...`
-- Playlists: `https://open.spotify.com/playlist/...`
-- Albums: `https://open.spotify.com/album/...`
-
-### YouTube
-
-- Videos: `https://www.youtube.com/watch?v=...`
-- Playlists: `https://www.youtube.com/playlist?list=...`
-
-### SoundCloud
-
-- Tracks: `https://soundcloud.com/artist/track`
-- Sets: `https://soundcloud.com/artist/sets/playlist`
-
-### Direct Audio URLs
-
-- Any direct audio file URL: `https://example.com/audio.mp3`
-
 ## Audio Quality
 
 Track Manager always downloads at the **best available quality** - no configuration needed.
+Some download sources like spotdl will encode at higher bit rate that source in order to prevent loss.
+In order for you to keep track of the real quality of your tracks, Track Manager add the true bit rate to the metadata.
 
-### Quality by Source
-
-| Source          | Format   | Bitrate               | Notes                              |
-| --------------- | -------- | --------------------- | ---------------------------------- |
-| **Spotify**     | MP3/M4A  | 320 kbps / 256 kbps   | Highest quality available          |
-| **YouTube**     | Opus/M4A | ~160 kbps / ~128 kbps | Best audio stream (format 251/140) |
-| **SoundCloud**  | Various  | Best available        | Uses same settings as YouTube      |
-| **Direct URLs** | Original | Preserved             | No re-encoding                     |
-
-### Technical Details
-
-- **Spotify**: Uses spotdl with `bitrate: "320k"` setting
-  - MP3: 320 kbps constant bitrate
-  - M4A/AAC: 256 kbps (comparable quality to 320 kbps MP3)
-
-- **YouTube**: Explicitly requests high-quality audio formats
-  - Format 251: Opus codec at ~160 kbps (preferred)
-  - Format 140: M4A/AAC at ~128 kbps (fallback)
-  - Avoids low-quality formats (249: ~50 kbps)
-
-- **SoundCloud**: Inherits YouTube's format selection
-  - Best available quality from source
-
-### Why These Quality Levels?
-
-- **320 kbps MP3** is considered "transparent" (indistinguishable from source)
-- **256 kbps AAC/M4A** is roughly equivalent to 320 kbps MP3 due to better compression
-- **160 kbps Opus** is highly efficient, comparable to 256 kbps MP3
-- Higher bitrates waste storage without audible quality improvement
-
-### Quality vs File Size
-
-Approximate file sizes for a 4-minute track:
-
-- 320 kbps MP3: ~10 MB
-- 256 kbps M4A: ~8 MB
-- 160 kbps Opus: ~5 MB
-- 128 kbps M4A: ~4 MB
+```bash
+# list quality of all tracks grouped into high, medium and low
+tm check-quality
+```
 
 ## Duplicate Detection
 
@@ -233,7 +169,7 @@ Failed downloads are logged to `failed-downloads.txt` with timestamps and error 
 
 **Problem:** "Error: No Spotify credentials found"
 
-**Solution:** Spotify downloads require API credentials. See the [Spotify Setup](#spotify-setup-optional) section above for detailed instructions.
+**Solution:** Spotify playlist downloads require API credentials. See the [Spotify Setup](#spotify-setup-optional) section above for detailed instructions.
 
 Get credentials from: https://developer.spotify.com/dashboard
 
@@ -246,8 +182,6 @@ Get credentials from: https://developer.spotify.com/dashboard
 1. Check library quality: Look for tracks < 128 kbps using your audio player's metadata view
 2. Re-download those tracks - they'll now download at best quality
 3. Remove old low-quality versions
-
-**Note:** Quality is now always best by default. You don't need to configure anything.
 
 ### YouTube Download Issues
 
