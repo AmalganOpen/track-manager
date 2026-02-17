@@ -136,7 +136,10 @@ class Downloader:
         from .songlink import SongLinkClient
 
         print("🔗 Looking up track on song.link...")
-        songlink = SongLinkClient()
+        songlink = SongLinkClient(
+            timeout=self.config.songlink_timeout,
+            max_retries=self.config.songlink_max_retries
+        )
         spotify_url = songlink.find_spotify_url(url)
 
         if spotify_url:

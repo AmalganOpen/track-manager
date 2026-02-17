@@ -35,6 +35,16 @@ dabmusic:
   password: ""
   endpoint: "https://dabmusic.xyz"
 
+# song.link API configuration
+songlink:
+  # Request timeout in seconds (default: 20)
+  # Increase if you experience frequent timeouts
+  timeout: 20
+  
+  # Maximum retry attempts on failure (default: 3)
+  # Set to 1 to disable retries
+  max_retries: 3
+
 # Download preferences
 downloads:
   # Default format: auto (prefer m4a), m4a, or mp3

@@ -132,3 +132,13 @@ class Config:
         if not csv_path.is_absolute():
             csv_path = self.config_path.parent / csv_path
         return csv_path
+
+    @property
+    def songlink_timeout(self) -> int:
+        """Get song.link API timeout in seconds."""
+        return self.get("songlink.timeout", 20)
+
+    @property
+    def songlink_max_retries(self) -> int:
+        """Get song.link API max retry attempts."""
+        return self.get("songlink.max_retries", 3)
