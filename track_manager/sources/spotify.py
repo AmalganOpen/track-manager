@@ -178,6 +178,13 @@ class SpotifyDownloader(BaseDownloader):
                         ):
                             success += 1
                         else:
+                            # Log the failure when file is not found or processing fails
+                            if not file_path:
+                                print("⚠️ Download failed: file not found")
+                                self.log_failure(song.url, "spotdl completed but file not found")
+                            else:
+                                print("⚠️ Download failed: processing error")
+                                self.log_failure(song.url, "File processing failed")
                             failed += 1
                     else:
                         print("⚠️ Download failed")
