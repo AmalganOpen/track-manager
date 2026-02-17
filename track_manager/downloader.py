@@ -802,7 +802,7 @@ class Downloader:
         elif source_type == "youtube":
             handler = youtube.YouTubeDownloader(self.config, self.output_dir, self)
         elif source_type == "soundcloud":
-            handler = soundcloud.SoundCloudDownloader(self.config, self.output_dir)
+            handler = soundcloud.SoundCloudDownloader(self.config, self.output_dir, self)
         elif source_type == "unknown":
             # Unrecognized platform (Apple Music, Deezer, etc.)
             # Try smart download via song.link → TIDAL

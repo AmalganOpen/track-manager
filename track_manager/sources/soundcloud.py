@@ -20,11 +20,25 @@ class SoundCloudDownloader(YouTubeDownloader):
         Uses 128kbps target to match free tier quality.
         Without Go+ credentials, only free tier (~128kbps) is accessible.
         """
-        # Temporarily override preferredquality for SoundCloud
-        import yt_dlp
-
         # Get parent's ydl_opts
         audio_format = "m4a" if format == "auto" else format
+        
+        # Try smart download first (song.link → TIDAL)
+        if self.parent_downloader:
+            print("🔗 Trying smart download...")
+            smart_success = self.parent_downloader.try_smart_download(
+                url, audio_format
+            )
+            
+            if smart_success:
+                print("✅ Downloaded via smart download")
+                return
+            
+            print("⬇️ Downloading from SoundCloud")
+            print()
+        
+        # Temporarily override preferredquality for SoundCloud
+        import yt_dlp
 
         # Match free tier quality (no Go+ credentials)
         ydl_opts = {
