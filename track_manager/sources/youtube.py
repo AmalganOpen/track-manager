@@ -3,7 +3,8 @@
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
+from urllib.parse import urlparse, parse_qs
 
 try:
     import yt_dlp
@@ -13,6 +14,44 @@ except ImportError:
     sys.exit(1)
 
 from .base import BaseDownloader
+
+
+URLType = Literal["video", "playlist", "video_in_playlist"]
+
+
+def parse_youtube_url(url: str) -> tuple[URLType, Optional[str], Optional[str]]:
+    """Parse a YouTube URL to determine its type.
+    
+    Args:
+        url: YouTube URL to parse
+        
+    Returns:
+        Tuple of (url_type, video_id, playlist_id)
+        - url_type: "video", "playlist", or "video_in_playlist"
+        - video_id: Video ID if present
+        - playlist_id: Playlist ID if present
+    """
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    
+    # Extract IDs
+    video_id = query.get("v", [None])[0]
+    playlist_id = query.get("list", [None])[0]
+    
+    # Check path for playlist URLs
+    if "/playlist" in parsed.path and playlist_id:
+        return "playlist", None, playlist_id
+    
+    # Video with playlist context
+    if video_id and playlist_id:
+        return "video_in_playlist", video_id, playlist_id
+    
+    # Plain video
+    if video_id:
+        return "video", video_id, None
+    
+    # Fallback - treat as video
+    return "video", None, None
 
 
 class YouTubeDownloader(BaseDownloader):
@@ -31,67 +70,93 @@ class YouTubeDownloader(BaseDownloader):
         else:
             audio_format = format
 
+        # Parse URL to determine type
+        url_type, video_id, playlist_id = parse_youtube_url(url)
+        
+        # Handle video in playlist context - ask user what they want
+        if url_type == "video_in_playlist":
+            print("🎵 URL contains both video and playlist information", flush=True)
+            print()
+            print("What would you like to download?")
+            print("  1. Just this video")
+            print("  2. Entire playlist")
+            print()
+            
+            while True:
+                response = input("Choice [1/2]: ").strip()
+                if response == "1":
+                    # Download just the video - construct plain video URL
+                    url = f"https://www.youtube.com/watch?v={video_id}"
+                    url_type = "video"
+                    break
+                elif response == "2":
+                    # Download entire playlist - construct playlist URL
+                    url = f"https://www.youtube.com/playlist?list={playlist_id}"
+                    url_type = "playlist"
+                    break
+                else:
+                    print("Invalid choice. Please enter 1 or 2.")
+            print()
+
         # Check if it's a playlist and extract entries
         is_playlist = False
         playlist_entries = []
         
-        # Detect if URL is a playlist (don't use extract_flat for detection)
-        with yt_dlp.YoutubeDL({
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": False,  # Extract playlists even when video ID is present
-            "extract_flat": "in_playlist",  # Only flat-extract playlist entries
-        }) as ydl:
-            try:
-                info = ydl.extract_info(url, download=False)
-                is_playlist = info.get("_type") == "playlist"
+        # For plain playlists, extract and confirm
+        if url_type == "playlist":
+            with yt_dlp.YoutubeDL({
+                "quiet": True,
+                "no_warnings": True,
+                "extract_flat": "in_playlist",
+            }) as ydl:
+                try:
+                    info = ydl.extract_info(url, download=False)
+                    is_playlist = info.get("_type") == "playlist"
 
-                if is_playlist:
-                    playlist_entries = info.get("entries", [])
-                    track_count = len(playlist_entries)
-                    playlist_title = info.get("title", "Unknown playlist")
+                    if is_playlist:
+                        playlist_entries = info.get("entries", [])
+                        track_count = len(playlist_entries)
+                        playlist_title = info.get("title", "Unknown playlist")
+                        
+                        print(f"📝 Playlist: {playlist_title}", flush=True)
+                        print(f"   Contains {track_count} video{'s' if track_count != 1 else ''}", flush=True)
+                        print()
+                        
+                        response = input(f"Download all {track_count} tracks? [y/N]: ")
+                        if response.lower() != "y":
+                            print("Cancelled")
+                            return
+                except Exception as e:
+                    error_msg = str(e).lower()
                     
-                    print(f"📝 Playlist detected: {playlist_title}", flush=True)
-                    print(f"   Contains {track_count} video{'s' if track_count != 1 else ''}", flush=True)
-                    print()
+                    # Check for private/restricted content indicators
+                    private_indicators = [
+                        'private',
+                        'unavailable',
+                        'does not exist',  # YouTube's message for private playlists
+                        'sign in',
+                        'members-only',
+                        'join this channel',
+                    ]
                     
-                    # Always ask for confirmation on playlists
-                    # (User might have accidentally copied a playlist URL when they wanted a single track)
-                    response = input(f"Download all {track_count} tracks? [y/N]: ")
-                    if response.lower() != "y":
-                        print("Cancelled")
+                    is_private = any(indicator in error_msg for indicator in private_indicators)
+                    
+                    if is_private:
+                        print("❌ Cannot access playlist", file=sys.stderr)
+                        print()
+                        print("💡 This may be a private or members-only playlist.", file=sys.stderr)
+                        print("   To download it, you need to:", file=sys.stderr)
+                        print("   1. Go to YouTube and open the playlist", file=sys.stderr)
+                        print("   2. Click 'Edit' → 'Playlist privacy'", file=sys.stderr)
+                        print("   3. Change from 'Private' to 'Unlisted'", file=sys.stderr)
+                        print(file=sys.stderr)
+                        print("   Note: 'Unlisted' means only people with the link can view it.", file=sys.stderr)
                         return
-            except Exception as e:
-                error_msg = str(e).lower()
-                
-                # Check for private/restricted content indicators
-                private_indicators = [
-                    'private',
-                    'unavailable',
-                    'does not exist',  # YouTube's message for private playlists
-                    'sign in',
-                    'members-only',
-                    'join this channel',
-                ]
-                
-                is_private = any(indicator in error_msg for indicator in private_indicators)
-                
-                if is_private:
-                    print("❌ Cannot access playlist", file=sys.stderr)
-                    print()
-                    print("💡 This may be a private or members-only playlist.", file=sys.stderr)
-                    print("   To download it, you need to:", file=sys.stderr)
-                    print("   1. Go to YouTube and open the playlist", file=sys.stderr)
-                    print("   2. Click 'Edit' → 'Playlist privacy'", file=sys.stderr)
-                    print("   3. Change from 'Private' to 'Unlisted'", file=sys.stderr)
-                    print(file=sys.stderr)
-                    print("   Note: 'Unlisted' means only people with the link can view it.", file=sys.stderr)
-                    return
-                else:
-                    print(f"⚠️ Could not extract playlist info: {e}", file=sys.stderr)
-                    print(file=sys.stderr)
-                    print("💡 If this is a private playlist, make sure it's set to 'Unlisted' instead.", file=sys.stderr)
-                    return  # Don't continue - can't process this URL
+                    else:
+                        print(f"⚠️ Could not extract playlist info: {e}", file=sys.stderr)
+                        print(file=sys.stderr)
+                        print("💡 If this is a private playlist, make sure it's set to 'Unlisted' instead.", file=sys.stderr)
+                        return  # Don't continue - can't process this URL
 
         # Download tracks
         success = 0
@@ -100,6 +165,55 @@ class YouTubeDownloader(BaseDownloader):
         # Store playlist URL if it's a playlist
         playlist_url = url if is_playlist else None
 
+        # For single videos, skip straight to download
+        if url_type == "video":
+            if self.parent_downloader:
+                smart_success = self.parent_downloader.try_smart_download(
+                    url, audio_format
+                )
+                
+                if smart_success:
+                    print("✅ Downloaded via smart download")
+                    return
+                
+                print("⬇️ Downloading from YouTube")
+                print()
+            
+            # Download single video with yt-dlp
+            ydl_opts = {
+                "format": "251/140/bestaudio/best",
+                "writethumbnail": True,
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": audio_format,
+                        "preferredquality": "192",
+                    },
+                    {
+                        "key": "EmbedThumbnail",
+                    }
+                ],
+                "outtmpl": str(self.output_dir / ".tmp_%(id)s.%(ext)s"),
+                "quiet": True,
+                "no_warnings": False,
+                "extract_flat": False,
+                "remote_components": ["ejs:github"],
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                try:
+                    info = ydl.extract_info(url, download=True)
+                    if self._process_download(info, audio_format, None):
+                        print("✅ Download complete")
+                    else:
+                        print("❌ Download failed", file=sys.stderr)
+                except Exception as e:
+                    print(f"❌ Download failed: {e}", file=sys.stderr)
+                    self.log_failure(url, str(e))
+                    raise
+            return
+
+        # Handle playlists
         if is_playlist and self.parent_downloader:
             # Try smart download for each track in playlist
             total = len(playlist_entries)
@@ -146,20 +260,7 @@ class YouTubeDownloader(BaseDownloader):
             if failed > 0:
                 print(f"  Failed: {failed} (see {self.config.failed_log})")
         else:
-            # Single video with smart download support
-            if not is_playlist and self.parent_downloader:
-                smart_success = self.parent_downloader.try_smart_download(
-                    url, audio_format
-                )
-                
-                if smart_success:
-                    print("✅ Downloaded via smart download")
-                    return
-                
-                print("⬇️ Downloading from YouTube")
-                print()
-            
-            # Original flow for single videos or when no parent downloader
+            # Fallback for playlists without parent downloader (shouldn't happen in normal usage)
             ydl_opts = {
                 "format": "251/140/bestaudio/best",
                 "writethumbnail": True,
@@ -183,35 +284,27 @@ class YouTubeDownloader(BaseDownloader):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 try:
                     info = ydl.extract_info(url, download=True)
+                    entries = info.get("entries", [])
+                    total = len(entries)
 
-                    if is_playlist:
-                        entries = info.get("entries", [])
-                        total = len(entries)
+                    for idx, entry in enumerate(entries, 1):
+                        if entry:
+                            print(
+                                f"[{idx}/{total}] Processing: {entry.get('title', 'Unknown')}"
+                            )
 
-                        for idx, entry in enumerate(entries, 1):
-                            if entry:
-                                print(
-                                    f"[{idx}/{total}] Processing: {entry.get('title', 'Unknown')}"
-                                )
+                            if self._process_download(entry, audio_format, playlist_url):
+                                success += 1
+                            else:
+                                failed += 1
+                            print()
 
-                                if self._process_download(entry, audio_format, playlist_url):
-                                    success += 1
-                                else:
-                                    failed += 1
-                                print()
-                    else:
-                        if self._process_download(info, audio_format, playlist_url):
-                            success += 1
-                        else:
-                            failed += 1
-
-                    if is_playlist:
-                        print()
-                        print("━" * 60)
-                        print("✅ Download complete")
-                        print(f"   Success: {success}")
-                        if failed > 0:
-                            print(f"   Failed: {failed} (see {self.config.failed_log})")
+                    print()
+                    print("━" * 60)
+                    print("✅ Download complete")
+                    print(f"   Success: {success}")
+                    if failed > 0:
+                        print(f"   Failed: {failed} (see {self.config.failed_log})")
 
                 except Exception as e:
                     print(f"❌ Download failed: {e}", file=sys.stderr)
