@@ -8,14 +8,12 @@ output_dir: "~/Music/tm/tracks"
 failed_log: "~/Music/tm/failed-downloads.txt"
 
 # Metadata review CSV file
-
+metadata_csv: "tracks-metadata-review.csv"
 
 # Spotdl configuration (OPTIONAL - only needed for Spotify playlists/albums)
 # Individual Spotify track URLs work without credentials (downloaded via TIDAL)
 spotdl:
   # Spotify API credentials (get from https://developer.spotify.com/dashboard)
-  # Preferably set as environment variables: SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET
-  # Or set them here (but keep config.yaml out of version control!)
   # Leave empty if you don't need Spotify playlist support
   client_id: ""
   client_secret: ""
@@ -40,7 +38,7 @@ songlink:
   # Request timeout in seconds (default: 20)
   # Increase if you experience frequent timeouts
   timeout: 20
-  
+
   # Maximum retry attempts on failure (default: 3)
   # Set to 1 to disable retries
   max_retries: 3

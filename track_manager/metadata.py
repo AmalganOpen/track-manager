@@ -314,6 +314,118 @@ def update_metadata(file_path: Path, artist: str, title: str) -> bool:
         return False
 
 
+def show_full_metadata(file_path: Path):
+    """Display all metadata for an audio file.
+
+    Args:
+        file_path: Path to audio file
+    """
+    from mutagen.id3 import ID3
+    from mutagen.mp4 import MP4
+
+    if not file_path.exists():
+        print(f"❌ File not found: {file_path}")
+        return
+
+    print(f"📋 Metadata for: {file_path.name}")
+    print(f"   Path: {file_path.resolve()}")
+    print()
+
+    try:
+        # Get file type and size
+        file_size = file_path.stat().st_size
+        print(f"📁 File Info:")
+        print(f"   Format: {file_path.suffix.upper()[1:]}")
+        print(f"   Size: {file_size / 1024 / 1024:.2f} MB")
+        print()
+
+        # Read all metadata
+        audio = MutagenFile(str(file_path))
+        
+        if audio is None:
+            print("⚠️ Could not read metadata")
+            return
+
+        # Display audio properties
+        if audio.info:
+            print(f"🎵 Audio Properties:")
+            print(f"   Duration: {audio.info.length:.2f}s")
+            if hasattr(audio.info, 'bitrate'):
+                print(f"   Bitrate: {audio.info.bitrate // 1000} kbps")
+            if hasattr(audio.info, 'sample_rate'):
+                print(f"   Sample Rate: {audio.info.sample_rate} Hz")
+            if hasattr(audio.info, 'channels'):
+                print(f"   Channels: {audio.info.channels}")
+            print()
+
+        # Display metadata tags
+        print(f"🏷️  Metadata Tags:")
+        
+        if isinstance(audio, MP4):
+            # M4A/MP4 files
+            for key, value in sorted(audio.tags.items()):
+                # Format the value nicely
+                if isinstance(value, list):
+                    if len(value) == 1:
+                        value = value[0]
+                    else:
+                        value = ", ".join(str(v) for v in value)
+                
+                # Convert MP4 tag keys to readable names
+                tag_names = {
+                    '\xa9nam': 'Title',
+                    '\xa9ART': 'Artist',
+                    '\xa9alb': 'Album',
+                    '\xa9day': 'Year',
+                    '\xa9gen': 'Genre',
+                    'trkn': 'Track Number',
+                    'disk': 'Disk Number',
+                    '\xa9cmt': 'Comment',
+                    'covr': 'Cover Art',
+                    '----:com.apple.iTunes:ORIGINAL_BITRATE': 'Original Bitrate',
+                    '----:com.apple.iTunes:SOURCE': 'Source',
+                    '----:com.apple.iTunes:ISRC': 'ISRC',
+                }
+                
+                readable_key = tag_names.get(key, key)
+                
+                # Handle binary data
+                if isinstance(value, bytes):
+                    if 'covr' in key.lower() or 'cover' in readable_key.lower():
+                        print(f"   {readable_key}: [Image data, {len(value)} bytes]")
+                    else:
+                        try:
+                            decoded = value.decode('utf-8')
+                            print(f"   {readable_key}: {decoded}")
+                        except:
+                            print(f"   {readable_key}: [Binary data, {len(value)} bytes]")
+                else:
+                    print(f"   {readable_key}: {value}")
+        
+        else:
+            # MP3 and other formats using ID3 or easy tags
+            if hasattr(audio, 'tags') and audio.tags:
+                for key in sorted(audio.tags.keys()):
+                    value = audio.tags[key]
+                    
+                    # Handle different tag types
+                    if hasattr(value, 'text'):
+                        # ID3 tags have .text attribute
+                        text = value.text
+                        if isinstance(text, list):
+                            text = ", ".join(str(t) for t in text)
+                        print(f"   {key}: {text}")
+                    elif isinstance(value, bytes):
+                        print(f"   {key}: [Binary data, {len(value)} bytes]")
+                    else:
+                        print(f"   {key}: {value}")
+            else:
+                print("   No tags found")
+
+    except Exception as e:
+        print(f"❌ Error reading metadata: {e}")
+
+
 def verify_library(output_dir: Path) -> dict:
     """Verify metadata quality in library.
 

@@ -279,6 +279,22 @@ def rate_stats():
         click.echo()
 
 
+@cli.command("show-metadata")
+@click.argument("file", type=click.Path(exists=True))
+def show_metadata(file: str):
+    """Show all metadata for a track.
+    
+    Displays comprehensive metadata including:
+    - File information (format, size)
+    - Audio properties (duration, bitrate, sample rate)
+    - All metadata tags (title, artist, album, etc.)
+    - Provenance information (original source, bitrate)
+    """
+    from .metadata import show_full_metadata
+
+    show_full_metadata(Path(file))
+
+
 def main():
     """Main entry point."""
     cli()
