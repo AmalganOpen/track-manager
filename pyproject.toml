@@ -28,7 +28,7 @@ classifiers = [
 
 dependencies = [
     "yt-dlp>=2023.10.0",
-    "spotdl>=4.2.0",
+    "spotdl>=4.4.3",
     "requests>=2.31.0",
     "mutagen>=1.47.0",
     "pyyaml>=6.0",

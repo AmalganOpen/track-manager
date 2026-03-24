@@ -190,7 +190,7 @@ def check_setup():
     try:
         import spotdl
 
-        click.echo("✅ spotdl: Installed")
+        click.echo(f"✅ spotdl: {spotdl.__version__}")
     except ImportError:
         click.echo("⚠️ spotdl: Not installed (optional, needed for Spotify)")
         click.echo("   Install: pip install spotdl")

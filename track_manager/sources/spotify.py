@@ -100,8 +100,30 @@ class SpotifyDownloader(BaseDownloader):
             # Apply rate limiting before fetching playlist
             from ..rate_limiter import spotify_rate_limit
             spotify_rate_limit()
-            
-            songs = self.spotdl.search([url])
+
+            try:
+                songs = self.spotdl.search([url])
+            except KeyError as e:
+                if "genres" in str(e):
+                    """ print(
+                        "⚠️  spotdl failed: artist has no 'genres' in Spotify API response.",
+                        file=sys.stderr,
+                    )
+                    print(
+                        "   This is a known spotdl bug (spotdl/types/artist.py#104).",
+                        file=sys.stderr,
+                    )
+                    print() """
+                    if self.parent_downloader:
+                        print("🔄 Falling back to TIDAL download...")
+                        success = self.parent_downloader.try_smart_download(
+                            url, audio_format
+                        )
+                        if success:
+                            return
+                        print("❌ TIDAL fallback also failed.", file=sys.stderr)
+                    return
+                raise
 
             if not songs:
                 print("❌ No tracks found", file=sys.stderr)
