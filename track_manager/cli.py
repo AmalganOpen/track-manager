@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 try:
     import click
@@ -122,36 +122,48 @@ def download(url: str, format: str, output: Optional[str], dumb: bool):
     type=click.Path(exists=True),
     help="Check specific file for duplicates",
 )
-def check_duplicates(file: Optional[str]):
+@click.option(
+    "--output", "-o", type=click.Path(), help="Library directory to scan (overrides config)"
+)
+def check_duplicates(file: Optional[str], output: Optional[str]):
     """Check for duplicate tracks in library."""
     from .duplicates import check_file, scan_library
 
     config = Config()
+    library_dir = Path(output) if output else config.output_dir
 
     if file:
-        check_file(Path(file), config.output_dir)
+        check_file(Path(file), library_dir)
     else:
-        scan_library(config.output_dir)
+        scan_library(library_dir)
 
 
 @cli.command("verify-metadata")
-def verify_metadata():
+@click.option(
+    "--output", "-o", type=click.Path(), help="Library directory to scan (overrides config)"
+)
+def verify_metadata(output: Optional[str]):
     """Verify metadata quality in library."""
     from .metadata import verify_library
 
     config = Config()
-    verify_library(config.output_dir)
+    library_dir = Path(output) if output else config.output_dir
+    verify_library(library_dir)
 
 
 @cli.command("check-quality")
 @click.option("--detailed", "-d", is_flag=True, help="Show detailed info for each file")
 @click.option("--verbose", "-v", is_flag=True, help="Show outlier tracks (worst/best quality)")
-def check_quality(detailed: bool, verbose: bool):
+@click.option(
+    "--output", "-o", type=click.Path(), help="Library directory to scan (overrides config)"
+)
+def check_quality(detailed: bool, verbose: bool, output: Optional[str]):
     """Check audio quality of tracks in library."""
     from .quality import analyze_library
 
     config = Config()
-    analyze_library(config.output_dir, detailed, verbose)
+    library_dir = Path(output) if output else config.output_dir
+    analyze_library(library_dir, detailed, verbose)
 
 
 @cli.command("apply-metadata")
@@ -168,9 +180,37 @@ def apply_metadata(show: bool):
         apply_metadata_csv()
 
 
+def _collect_diff(user_map: Any, example_map: Any, removed: list, added: list, prefix: str = "") -> None:
+    """Compute which keys will be removed from / added to user_map relative to example_map."""
+    for k in user_map:
+        full = f"{prefix}.{k}" if prefix else k
+        if k not in example_map:
+            removed.append(full)
+        elif hasattr(user_map[k], "keys") and hasattr(example_map[k], "keys"):
+            _collect_diff(user_map[k], example_map[k], removed, added, full)
+
+    for k in example_map:
+        full = f"{prefix}.{k}" if prefix else k
+        if k not in user_map:
+            added.append(full)
+        elif hasattr(user_map[k], "keys") and hasattr(example_map[k], "keys"):
+            pass  # already handled above
+
+
+def _overlay_user_values(base_map: Any, user_map: Any) -> None:
+    """Copy user values onto base_map (example structure), preserving example comments."""
+    for k, v in user_map.items():
+        if k not in base_map:
+            continue
+        if hasattr(base_map[k], "keys") and hasattr(v, "keys"):
+            _overlay_user_values(base_map[k], v)
+        else:
+            base_map[k] = v
+
+
 @cli.command("check-setup")
 def check_setup():
-    """Verify all dependencies are installed."""
+    """Verify all dependencies are installed and sync config.yaml with config.example.yaml."""
     click.echo("🔍 Checking track-manager dependencies...")
     click.echo()
 
@@ -235,13 +275,73 @@ def check_setup():
         click.echo("   Install: pip install click", err=True)
         all_ok = False
 
-    # Check config
-    try:
-        config = Config()
-        click.echo("✅ Configuration: config.yaml found")
-    except SystemExit:
-        click.echo("⚠️ Configuration: config.yaml not found")
+    # Check and sync config
+    click.echo()
+    click.echo("🔧 Checking configuration...")
+    config_path = Path(__file__).parent.parent / "config.yaml"
+    example_path = Path(__file__).parent.parent / "config.example.yaml"
+
+    if not config_path.exists():
+        click.echo("⚠️  config.yaml not found")
         click.echo("   Copy config.example.yaml to config.yaml")
+    elif not example_path.exists():
+        click.echo("✅ config.yaml found (config.example.yaml missing, skipping sync)")
+    else:
+        try:
+            from ruamel.yaml import YAML as RuamelYAML
+            ryaml = RuamelYAML()
+            ryaml.preserve_quotes = True
+            with open(config_path) as f:
+                user_cfg = ryaml.load(f) or {}
+            with open(example_path) as f:
+                example_cfg = ryaml.load(f) or {}
+            use_ruamel = True
+        except ImportError:
+            import yaml
+            with open(config_path) as f:
+                user_cfg = yaml.safe_load(f) or {}
+            with open(example_path) as f:
+                example_cfg = yaml.safe_load(f) or {}
+            use_ruamel = False
+
+        removed: list = []
+        added: list = []
+        _collect_diff(user_cfg, example_cfg, removed, added)
+
+        if not removed and not added:
+            click.echo("✅ config.yaml is up to date")
+        else:
+            if removed:
+                click.echo(f"  Keys to remove ({len(removed)}):")
+                for key in removed:
+                    click.echo(f"    - {key}")
+            if added:
+                click.echo(f"  Keys to add ({len(added)}):")
+                for key in added:
+                    click.echo(f"    + {key}")
+
+            click.echo()
+            if click.confirm("Apply these changes to config.yaml?", default=True):
+                if use_ruamel:
+                    # Re-load example fresh so its comments are intact, then overlay user values
+                    with open(example_path) as f:
+                        synced_cfg = ryaml.load(f)
+                    _overlay_user_values(synced_cfg, user_cfg)
+                    with open(config_path, "w") as f:
+                        ryaml.dump(synced_cfg, f)
+                else:
+                    import yaml
+                    import copy
+                    synced_cfg = copy.deepcopy(example_cfg)
+                    _overlay_user_values(synced_cfg, user_cfg)
+                    with open(config_path, "w") as f:
+                        yaml.dump(synced_cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+                    click.echo("   Note: Comments were not preserved (ruamel.yaml not installed).")
+                click.echo("✅ config.yaml updated")
+                click.echo("   Re-run your install command to pick up any new dependencies:")
+                click.echo(f"     pip install -e {config_path.parent}")
+            else:
+                click.echo("Skipped config sync.")
 
     click.echo()
 
@@ -250,8 +350,9 @@ def check_setup():
         click.echo()
         click.echo("Next steps:")
         click.echo("  1. Ensure config.yaml is set up")
-        click.echo("  2. Run: track-manager download <url>")
-        click.echo("  Tip: You can use the 'tm' alias instead of 'track-manager'")
+        click.echo("  2. Re-run your install command to pick up any new dependencies:")
+        click.echo(f"     pip install -e {config_path.parent}  (or however you installed it originally)")
+        click.echo("  3. Run: tm <url>")
 
     else:
         click.echo(
