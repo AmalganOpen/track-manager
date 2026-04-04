@@ -138,7 +138,7 @@ class Downloader:
         print("🔗 Looking up track on song.link...")
         songlink = SongLinkClient(
             timeout=self.config.songlink_timeout,
-            max_retries=self.config.songlink_max_retries
+            max_retries=self.config.songlink_max_retries,
         )
         spotify_url = songlink.find_spotify_url(url)
 
@@ -264,6 +264,7 @@ class Downloader:
         format: str,
         spotify_metadata: Optional[dict] = None,
         playlist_url: Optional[str] = None,
+        isrc: Optional[str] = None,
     ) -> bool:
         """Try to download from public TIDAL API (no credentials required).
 
@@ -272,6 +273,7 @@ class Downloader:
             format: Output format
             spotify_metadata: Optional Spotify metadata
             playlist_url: Playlist URL if from a playlist
+            isrc: ISRC code if already known (used to skip song.link when cached)
 
         Returns:
             True if successful, False otherwise
@@ -288,8 +290,8 @@ class Downloader:
 
             print("🎵 Looking up track on TIDAL...")
             
-            # Get TIDAL ID from URL via song.link
-            tidal_id = client.get_tidal_id_from_url(url)
+            # Get TIDAL ID — checks ISRC cache first, falls back to song.link
+            tidal_id = client.get_tidal_id_from_url(url, isrc=isrc)
             
             if not tidal_id:
                 print("ℹ️ Track not found on TIDAL")
@@ -317,39 +319,52 @@ class Downloader:
 
             artist = sanitize_filename(artist)
             title = sanitize_filename(title)
-            output_path = self.output_dir / f"{artist} - {title}.flac"
 
-            # Download FLAC
-            success = client.download_track(tidal_id, output_path, quality="LOSSLESS")
+            # Collect metadata up front (needed regardless of quality tier used)
+            metadata = self._collect_tidal_metadata(track, spotify_metadata)
 
-            if success:
-                # Create provenance information
+            # Try quality tiers in preference order.
+            # LOSSLESS → FLAC download, re-encode to M4A 256k AAC.
+            # HIGH     → AAC 320k already in M4A container, tag in-place (no re-encode).
+            QUALITY_TIERS = [
+                ("LOSSLESS", ".flac"),
+                ("HIGH",     ".m4a"),
+            ]
+
+            for quality, ext in QUALITY_TIERS:
+                output_path = self.output_dir / f"{artist} - {title}{ext}"
+                success = client.download_track(tidal_id, output_path, quality=quality)
+                if not success:
+                    if quality != QUALITY_TIERS[-1][0]:
+                        print(f"ℹ️ LOSSLESS unavailable, trying HIGH quality...", file=sys.stderr)
+                    continue
+
                 provenance = DownloadProvenance(
                     track_url=url,
                     playlist_url=playlist_url,
                     source="tidal-public",
-                    original_format="flac",
-                    original_bitrate=None,  # FLAC is lossless
+                    original_format="flac" if quality == "LOSSLESS" else "aac",
+                    original_bitrate=None if quality == "LOSSLESS" else 320,
                 )
-                
-                # Collect all metadata (use TIDAL data as fallback)
-                metadata = self._collect_tidal_metadata(track, spotify_metadata)
-                
-                # Convert FLAC to M4A and apply all metadata at once
-                m4a_path = self._convert_to_m4a(output_path, metadata, provenance)
-                if m4a_path:
-                    print(f"✅ Downloaded and converted to M4A: {m4a_path}")
-                    print()
-                    return True
+
+                if quality == "LOSSLESS":
+                    final_path = self._convert_to_m4a(output_path, metadata, provenance)
+                    if not final_path:
+                        # Conversion failed but FLAC is there — still a win
+                        print(f"✅ Downloaded FLAC (conversion failed): {output_path}")
+                        print()
+                        return True
+                    print(f"✅ Downloaded and converted to M4A: {final_path}")
                 else:
-                    # Conversion failed, but FLAC is still there
-                    print(f"✅ Downloaded FLAC (conversion failed): {output_path}")
-                    print()
-                    return True
-            else:
-                print("❌ TIDAL download failed", file=sys.stderr)
+                    self._apply_m4a_metadata(output_path, metadata, provenance)
+                    print(f"✅ Downloaded M4A (320k AAC): {output_path}")
+
                 print()
-                return False
+                return True
+
+            print("❌ TIDAL download failed", file=sys.stderr)
+            print()
+            return False
 
         except Exception as e:
             print(f"⚠️ TIDAL error: {e}", file=sys.stderr)
@@ -519,6 +534,70 @@ class Downloader:
         except Exception as e:
             print(f"⚠️ Failed to apply metadata: {e}", file=sys.stderr)
 
+    def _apply_m4a_metadata(
+        self,
+        m4a_path: Path,
+        metadata: dict,
+        provenance: Optional["DownloadProvenance"] = None,
+        cover_data: Optional[bytes] = None,
+    ) -> None:
+        """Apply metadata and optionally embed cover art into an existing M4A file.
+
+        Args:
+            m4a_path: Path to M4A file to tag in-place
+            metadata: Metadata dictionary to apply
+            provenance: Download provenance information
+            cover_data: Pre-loaded cover art bytes (fetched from URL if None)
+        """
+        from mutagen.mp4 import MP4, MP4Cover
+
+        m4a_audio = MP4(str(m4a_path))
+
+        if metadata.get('title'):
+            m4a_audio['\xa9nam'] = metadata['title']
+        if metadata.get('artist'):
+            m4a_audio['\xa9ART'] = metadata['artist']
+        if metadata.get('album'):
+            m4a_audio['\xa9alb'] = metadata['album']
+        if metadata.get('date'):
+            m4a_audio['\xa9day'] = metadata['date']
+
+        if metadata.get('isrc'):
+            m4a_audio['----:com.apple.iTunes:ISRC'] = metadata['isrc'].encode('utf-8')
+        if metadata.get('barcode'):
+            m4a_audio['----:com.apple.iTunes:BARCODE'] = metadata['barcode'].encode('utf-8')
+        if metadata.get('label'):
+            m4a_audio['----:com.apple.iTunes:LABEL'] = metadata['label'].encode('utf-8')
+
+        if provenance:
+            m4a_audio['----:com.apple.iTunes:TRACK_URL'] = provenance.track_url.encode('utf-8')
+            if provenance.playlist_url:
+                m4a_audio['----:com.apple.iTunes:PLAYLIST_URL'] = provenance.playlist_url.encode('utf-8')
+            m4a_audio['----:com.apple.iTunes:SOURCE'] = provenance.source.encode('utf-8')
+            m4a_audio['----:com.apple.iTunes:ORIGINAL_FORMAT'] = provenance.original_format.encode('utf-8')
+            if provenance.original_bitrate:
+                m4a_audio['----:com.apple.iTunes:ORIGINAL_BITRATE'] = str(provenance.original_bitrate).encode('utf-8')
+
+        if not cover_data and metadata.get('cover_url'):
+            try:
+                import requests as _requests
+                r = _requests.get(metadata['cover_url'], timeout=10)
+                r.raise_for_status()
+                cover_data = r.content
+            except Exception as e:
+                print(f"⚠️ Failed to download cover art: {e}")
+
+        if cover_data:
+            m4a_audio["covr"] = [MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)]
+
+        m4a_audio.save()
+
+        print(f"🔄 Applied metadata (ISRC: {metadata.get('isrc', 'N/A')})")
+        if provenance:
+            print(f"🔄 Added provenance (source: {provenance.source}, format: {provenance.original_format})")
+        if cover_data:
+            print(f"🔄 Embedded cover art")
+
     def _convert_to_m4a(
         self,
         flac_path: Path,
@@ -538,7 +617,6 @@ class Downloader:
         import subprocess
 
         from mutagen.flac import FLAC
-        from mutagen.mp4 import MP4, MP4Cover
 
         m4a_path = flac_path.with_suffix(".m4a")
 
@@ -551,94 +629,26 @@ class Downloader:
             if flac_audio.pictures:
                 cover_data = flac_audio.pictures[0].data
 
-            # Use FFmpeg to convert FLAC to M4A (audio only)
-            # -vn: No video (skip cover art during conversion)
-            # -c:a aac: Use AAC codec
-            # -b:a 256k: Set bitrate to 256kbps
-            # -movflags +faststart: Optimize for streaming
-            # -map_metadata 0: Copy all metadata
             cmd = [
                 "ffmpeg",
-                "-i",
-                str(flac_path),
-                "-vn",  # Skip video/cover art
-                "-c:a",
-                "aac",
-                "-b:a",
-                "256k",
-                "-ar",
-                "48000",  # Standard sample rate for DJ software compatibility
-                "-movflags",
-                "+faststart",
-                "-map_metadata",
-                "0",
-                "-y",  # Overwrite output file
+                "-i", str(flac_path),
+                "-vn",
+                "-c:a", "aac",
+                "-b:a", "256k",
+                "-ar", "48000",
+                "-movflags", "+faststart",
+                "-map_metadata", "0",
+                "-y",
                 str(m4a_path),
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
 
-            # Verify M4A file was created
             if not m4a_path.exists():
                 raise Exception("M4A file not created")
 
-            # Apply all metadata to M4A
-            m4a_audio = MP4(str(m4a_path))
-            
-            # Basic metadata (iTunes standard atoms)
-            if metadata.get('title'):
-                m4a_audio['\xa9nam'] = metadata['title']
-            if metadata.get('artist'):
-                m4a_audio['\xa9ART'] = metadata['artist']
-            if metadata.get('album'):
-                m4a_audio['\xa9alb'] = metadata['album']
-            if metadata.get('date'):
-                m4a_audio['\xa9day'] = metadata['date']
-            
-            # Music metadata (freeform atoms)
-            if metadata.get('isrc'):
-                m4a_audio['----:com.apple.iTunes:ISRC'] = metadata['isrc'].encode('utf-8')
-            if metadata.get('barcode'):
-                m4a_audio['----:com.apple.iTunes:BARCODE'] = metadata['barcode'].encode('utf-8')
-            if metadata.get('label'):
-                m4a_audio['----:com.apple.iTunes:LABEL'] = metadata['label'].encode('utf-8')
-            
-            # Provenance metadata (freeform atoms)
-            if provenance:
-                m4a_audio['----:com.apple.iTunes:TRACK_URL'] = provenance.track_url.encode('utf-8')
-                if provenance.playlist_url:
-                    m4a_audio['----:com.apple.iTunes:PLAYLIST_URL'] = provenance.playlist_url.encode('utf-8')
-                m4a_audio['----:com.apple.iTunes:SOURCE'] = provenance.source.encode('utf-8')
-                m4a_audio['----:com.apple.iTunes:ORIGINAL_FORMAT'] = provenance.original_format.encode('utf-8')
-                if provenance.original_bitrate:
-                    m4a_audio['----:com.apple.iTunes:ORIGINAL_BITRATE'] = str(provenance.original_bitrate).encode('utf-8')
-            
-            # Download and embed cover art
-            if not cover_data and metadata.get('cover_url'):
-                try:
-                    import requests
-                    response = requests.get(metadata['cover_url'], timeout=10)
-                    response.raise_for_status()
-                    cover_data = response.content
-                except Exception as e:
-                    print(f"⚠️ Failed to download cover art: {e}")
-            
-            # Embed cover art
-            if cover_data:
-                m4a_audio["covr"] = [
-                    MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)
-                ]
-            
-            m4a_audio.save()
-            
-            # Print confirmation
-            print(f"🔄 Applied metadata (ISRC: {metadata.get('isrc', 'N/A')})")
-            if provenance:
-                print(f"🔄 Added provenance (source: {provenance.source}, format: {provenance.original_format})")
-            if cover_data:
-                print(f"🔄 Embedded cover art")
+            self._apply_m4a_metadata(m4a_path, metadata, provenance, cover_data)
 
-            # Delete FLAC file
             flac_path.unlink()
             print(f"✅ Converted to M4A and removed FLAC")
 
@@ -729,8 +739,6 @@ class Downloader:
         if self.dumb:
             return False
         
-        # Note: ISRC parameter is only used when provided by Spotify playlists
-        # For individual URLs, we use song.link → TIDAL which provides ISRC
         if isrc:
             print(f"🔍 Using ISRC from Spotify: {isrc}")
         
@@ -739,13 +747,15 @@ class Downloader:
         if source_type == "direct":
             return False
         
-        # Try public TIDAL API (no credentials required)
-        # TIDAL will get metadata from song.link, no Spotify API needed
+        # Try public TIDAL API (no credentials required).
+        # When ISRC is provided it is checked against the local cache first so
+        # that song.link is only called once per track across all invocations.
         return self._try_tidal_public(
             url,
             format,
             spotify_metadata,
             playlist_url=playlist_url,
+            isrc=isrc,
         )
 
     def download(self, url: str, format: str = "auto"):
