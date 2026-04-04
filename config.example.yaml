@@ -18,11 +18,6 @@ spotdl:
   client_id: ""
   client_secret: ""
 
-  # Path to spotdl executable (leave empty to use 'spotdl' from PATH)
-  path: ""
-  # Alternative: Use a specific Python environment
-  # path: "/Users/username/.pyenv/versions/3.12.7/envs/spotdl-env/bin/spotdl"
-
 # DAB Music (LEGACY - currently unused)
 # Note: DAB Music service is currently unavailable
 # High-quality FLAC downloads now use public TIDAL API (no credentials required)
@@ -33,14 +28,17 @@ dabmusic:
   password: ""
   endpoint: "https://dabmusic.xyz"
 
-# song.link API configuration
+# song.link / Odesli API configuration
+# song.link is used to resolve track URLs → TIDAL IDs for lossless downloads.
+# Rate limit: 10 requests/minute (unauthenticated free tier).
+# Spotify downloads use the ISRC platform endpoint (?platform=isrc&type=song&id=...)
+# which has a separate rate limit bucket from URL-based lookups.
+# Successful lookups are cached in ~/.cache/track-manager/ to minimise API calls.
 songlink:
   # Request timeout in seconds (default: 20)
-  # Increase if you experience frequent timeouts
   timeout: 20
 
   # Maximum retry attempts on failure (default: 3)
-  # Set to 1 to disable retries
   max_retries: 3
 
 # Download preferences
