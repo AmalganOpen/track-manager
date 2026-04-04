@@ -1,6 +1,10 @@
 """Rate limiting utilities for API calls."""
 
+import json
+import os
+import sys
 import time
+from pathlib import Path
 from threading import Lock
 from collections import deque
 from typing import Optional
@@ -90,17 +94,71 @@ class RateLimiter:
             }
 
 
+class PersistentRateLimiter:
+    """Sliding-window rate limiter backed by a file so limits persist across processes.
+
+    Stores a list of recent call timestamps in a JSON file and enforces a
+    maximum number of calls within a rolling time window.
+    """
+
+    def __init__(self, max_calls: int, window_seconds: float, state_file: Path):
+        self.max_calls = max_calls
+        self.window = window_seconds
+        self.state_file = state_file
+        self.lock = Lock()
+
+    def _read_timestamps(self) -> list:
+        try:
+            if self.state_file.exists():
+                return json.loads(self.state_file.read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+        return []
+
+    def _write_timestamps(self, timestamps: list) -> None:
+        try:
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            self.state_file.write_text(json.dumps(timestamps))
+        except OSError:
+            pass
+
+    def acquire(self) -> None:
+        """Block until a call slot is available within the rate limit window."""
+        with self.lock:
+            while True:
+                now = time.time()
+                timestamps = self._read_timestamps()
+                # Drop timestamps outside the window
+                timestamps = [t for t in timestamps if now - t < self.window]
+
+                if len(timestamps) < self.max_calls:
+                    timestamps.append(now)
+                    self._write_timestamps(timestamps)
+                    return
+
+                # Wait until the oldest timestamp falls outside the window
+                oldest = min(timestamps)
+                wait = self.window - (now - oldest) + 0.05  # small buffer
+                print(f"⏳ song.link rate limit ({self.max_calls}/{self.window:.0f}s): waiting {wait:.1f}s...", file=sys.stderr)
+                time.sleep(wait)
+
+
+_CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "track-manager"
+
 # Global rate limiters for each service
 # Note: Spotify rate limit is very conservative (1/sec) because spotdl
 # makes many internal calls during playlist fetching. Better to be slow
 # and reliable than hit rate limits.
 _spotify_limiter = RateLimiter(calls_per_second=1.0, burst_size=3)
-_songlink_limiter = RateLimiter(calls_per_second=0.15, burst_size=2)  # ~9/min, conservative
+# song.link: 10 req/min hard limit. Persistent across invocations so rapid
+# successive `tm` runs don't collectively exceed the limit.
+_songlink_limiter = PersistentRateLimiter(
+    max_calls=8,           # stay under the 10/min limit with headroom
+    window_seconds=60.0,
+    state_file=_CACHE_DIR / "songlink_calls.json",
+)
 _dab_limiter = RateLimiter(calls_per_second=2.0, burst_size=5)
 _tidal_limiter = RateLimiter(calls_per_second=2.0, burst_size=5)  # Conservative for public APIs
-
-
-import sys
 
 
 def spotify_rate_limit(show_progress: bool = False) -> None:
@@ -113,11 +171,7 @@ def spotify_rate_limit(show_progress: bool = False) -> None:
 
 
 def songlink_rate_limit(show_progress: bool = False) -> None:
-    """Apply song.link API rate limiting."""
-    if show_progress:
-        stats = _songlink_limiter.get_stats()
-        if stats['tokens_available'] < 1:
-            print("⏳ Rate limiting active (song.link API)...", file=sys.stderr)
+    """Apply song.link API rate limiting (persistent across invocations)."""
     _songlink_limiter.acquire()
 
 
@@ -141,9 +195,16 @@ def tidal_rate_limit(show_progress: bool = False) -> None:
 
 def get_rate_limit_stats() -> dict:
     """Get statistics for all rate limiters."""
+    now = time.time()
+    sl_timestamps = _songlink_limiter._read_timestamps()
+    sl_recent = [t for t in sl_timestamps if now - t < _songlink_limiter.window]
     return {
         'spotify': _spotify_limiter.get_stats(),
-        'songlink': _songlink_limiter.get_stats(),
+        'songlink': {
+            'calls_last_minute': len(sl_recent),
+            'max_calls': _songlink_limiter.max_calls,
+            'window_seconds': _songlink_limiter.window,
+        },
         'dab_music': _dab_limiter.get_stats(),
-        'tidal': _tidal_limiter.get_stats()
+        'tidal': _tidal_limiter.get_stats(),
     }
