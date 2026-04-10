@@ -361,6 +361,111 @@ def check_setup():
         sys.exit(1)
 
 
+@cli.command("upgrade")
+@click.option(
+    "--threshold",
+    "-t",
+    type=int,
+    default=256,
+    help="Quality threshold in kbps — tracks below this are candidates (default: 256)",
+)
+@click.option(
+    "--output", "-o", type=click.Path(), help="Library directory to scan (overrides config)"
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show candidates without downloading anything",
+)
+@click.option("--yes", "-y", is_flag=True, help="Skip per-track confirmation")
+@click.option("--verbose", "-v", is_flag=True, help="Show extra detail during download")
+def upgrade(
+    threshold: int,
+    output: Optional[str],
+    dry_run: bool,
+    yes: bool,
+    verbose: bool,
+):
+    """Upgrade low/mid quality tracks to higher quality versions.
+
+    Scans the library for tracks whose bitrate is below THRESHOLD kbps and
+    that have a TRACK_URL provenance tag (set automatically by track-manager).
+    Each candidate is re-downloaded from its original source URL and the file
+    is replaced in-place so Rekordbox cue points are preserved.
+
+    If the upgraded file uses a different extension (e.g. mp3 → m4a) you will
+    need to relocate the track in Rekordbox once — all cue points survive.
+    """
+    from .upgrade import find_upgradeable_tracks, upgrade_track
+    from .quality import format_bitrate
+
+    config = Config()
+    library_dir = Path(output) if output else config.output_dir
+
+    click.echo(f"🔍 Scanning {library_dir} for tracks below {threshold} kbps...")
+    click.echo()
+
+    candidates = find_upgradeable_tracks(library_dir, threshold_kbps=threshold)
+
+    if not candidates:
+        click.echo("✅ No upgradeable tracks found (all tracks meet quality threshold or lack TRACK_URL)")
+        return
+
+    click.echo(f"Found {len(candidates)} track(s) to upgrade:\n")
+    for i, c in enumerate(candidates, 1):
+        click.echo(
+            f"  {i:>3}. [{format_bitrate(c['bitrate']):>10}] {c['path'].name}"
+        )
+        if verbose:
+            click.echo(f"       URL: {c['track_url']}")
+    click.echo()
+
+    if dry_run:
+        click.echo("ℹ️  Dry-run mode — nothing downloaded.")
+        return
+
+    if not yes and not click.confirm(
+        f"Upgrade all {len(candidates)} track(s)?", default=True
+    ):
+        click.echo("Aborted.")
+        return
+
+    click.echo()
+
+    # Create a single Downloader for the session so that spotdl's global
+    # Spotify client is only initialised once across all tracks.
+    from .downloader import Downloader
+
+    shared_downloader = Downloader(config)
+
+    ok = 0
+    failed = 0
+    for c in candidates:
+        click.echo(f"⬆️  {c['path'].name}  ({format_bitrate(c['bitrate'])})")
+
+        if not yes:
+            if not click.confirm("   Upgrade this track?", default=True):
+                click.echo("   Skipped.")
+                click.echo()
+                continue
+
+        success, msg = upgrade_track(
+            c["path"], c["track_url"], config, verbose=verbose, downloader=shared_downloader
+        )
+
+        if success:
+            click.echo(f"   ✅ {msg}")
+            ok += 1
+        else:
+            click.echo(f"   ❌ {msg}", err=True)
+            failed += 1
+
+        click.echo()
+
+    click.echo(f"Done — {ok} upgraded, {failed} failed.")
+
+
 @cli.command("rate-stats")
 def rate_stats():
     """Show API rate limit statistics."""

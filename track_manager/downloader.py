@@ -29,7 +29,29 @@ class Downloader:
 
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        # Cached handler for sources whose underlying client can only be
+        # initialised once per process (e.g. spotdl's SpotifyClient singleton).
+        self._spotify_handler = None
+        # Cached DAB Music client (created lazily on first use).
+        self._dab_client = None
+
+    def _get_spotify_handler(self):
+        """Return (and cache) the SpotifyDownloader, updating its output_dir."""
+        from .sources import spotify as spotify_source
+
+        if self._spotify_handler is None:
+            self._spotify_handler = spotify_source.SpotifyDownloader(
+                self.config, self.output_dir, self
+            )
+        else:
+            # Reuse the existing handler but point it at the current output dir.
+            self._spotify_handler.output_dir = self.output_dir
+            # Also update spotdl's internal downloader so it writes to the right place.
+            self._spotify_handler.spotdl.downloader.settings["output"] = str(self.output_dir)
+
+        return self._spotify_handler
+
     def _has_spotify_credentials(self) -> bool:
         """Check if Spotify API credentials are available.
         
@@ -47,9 +69,6 @@ class Downloader:
             client_secret = self.config.get("spotdl.client_secret", "")
         
         return bool(client_id and client_secret)
-        
-        # Cache DAB Music client (created lazily on first use)
-        self._dab_client = None
 
     def _extract_spotify_id(self, url: str) -> Optional[str]:
         """Extract Spotify track ID from URL."""
@@ -758,18 +777,21 @@ class Downloader:
             isrc=isrc,
         )
 
-    def download(self, url: str, format: str = "auto"):
+    def download(self, url: str, format: str = "auto", show_header: bool = True):
         """Download track(s) from URL.
 
         Args:
             url: URL to download from
             format: Output format (auto, m4a, mp3)
+            show_header: Print source/output-directory header lines.  Set to
+                False when the caller (e.g. upgrade) manages its own context.
         """
         source_type = self.detect_source(url)
 
-        print(f"🎵 Detected source: {source_type.title()}")
-        print(f"📁 Output directory: {self.output_dir}")
-        print()
+        if show_header:
+            print(f"🎵 Detected source: {source_type.title()}")
+            print(f"📁 Output directory: {self.output_dir}")
+            print()
 
         # Route to appropriate handler (handlers now manage smart downloads internally)
         if source_type == "spotify":
@@ -811,7 +833,7 @@ class Downloader:
                         return
             
             # If we get here, we have Spotify credentials
-            handler = spotify.SpotifyDownloader(self.config, self.output_dir, self)
+            handler = self._get_spotify_handler()
         elif source_type == "youtube":
             handler = youtube.YouTubeDownloader(self.config, self.output_dir, self)
         elif source_type == "soundcloud":

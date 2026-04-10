@@ -78,6 +78,38 @@ class SpotifyDownloader(BaseDownloader):
             downloader_settings=downloader_settings,
         )
 
+    def _stop_spotdl_progress(self) -> None:
+        """Stop spotdl's Rich Live display and set progress_handler to None.
+
+        spotdl's ProgressHandler enters Rich's Live display in __init__ and
+        never exits it between individual song downloads.  We stop it here so
+        the Live display does not keep refreshing the terminal (wiping prompts,
+        etc.) between tracks.  We set progress_handler to None so that
+        _start_spotdl_progress() knows it must create a fresh one next time.
+        Note: we call rich_progress_bar.stop() directly instead of ph.close()
+        because ph.close() also calls logging.shutdown() which disables logging
+        for the rest of the process.
+        """
+        ph = getattr(self.spotdl.downloader, "progress_handler", None)
+        if ph is not None and hasattr(ph, "rich_progress_bar"):
+            try:
+                ph.rich_progress_bar.stop()
+            except Exception:
+                pass
+        self.spotdl.downloader.progress_handler = None
+
+    def _start_spotdl_progress(self) -> None:
+        """Create a fresh ProgressHandler (starts Rich Live display).
+
+        Must be called immediately before self.spotdl.download() so the Live
+        display is only active while a download is actually in progress.
+        """
+        from spotdl.download.progress_handler import ProgressHandler
+
+        if self.spotdl.downloader.progress_handler is None:
+            simple_tui = self.spotdl.downloader.settings.get("simple_tui", False)
+            self.spotdl.downloader.progress_handler = ProgressHandler(simple_tui)
+
     def download(self, url: str, format: str = "auto"):
         """Download track(s) from Spotify.
 
@@ -189,11 +221,15 @@ class SpotifyDownloader(BaseDownloader):
                     # Fallback: Download using spotdl
                     # With format="opus", spotdl will respect yt_dlp_args and download format 251
                     print("  ⬇️ Downloading from YouTube (via spotdl)")
+                    self._start_spotdl_progress()
                     result = self.spotdl.download(song)
+                    self._stop_spotdl_progress()
 
                     if result:
-                        # Find downloaded file (will be .m4a after conversion)
-                        file_path = self._find_downloaded_file(song, audio_format)
+                        # Find downloaded file (will be .m4a after conversion).
+                        # Pass result so _find_downloaded_file uses spotdl's
+                        # returned path directly without a redundant re-download.
+                        file_path = self._find_downloaded_file(song, audio_format, spotdl_result=result)
 
                         if file_path and self._process_download(
                             file_path, song, audio_format, playlist_url
@@ -214,6 +250,30 @@ class SpotifyDownloader(BaseDownloader):
                         failed += 1
 
                 except Exception as e:
+                    err_str = str(e)
+                    if "401" in err_str or "authentication required" in err_str.lower():
+                        print("❌ Spotify authentication failed (401)", file=sys.stderr)
+                        print(
+                            "   Your Spotify API credentials appear to be invalid.",
+                            file=sys.stderr,
+                        )
+                        print(
+                            "   Please check your client_id and client_secret in config.yaml:",
+                            file=sys.stderr,
+                        )
+                        print(
+                            "   1. Go to https://developer.spotify.com/dashboard",
+                            file=sys.stderr,
+                        )
+                        print(
+                            "   2. Open your app → Settings → regenerate Client Secret if needed",
+                            file=sys.stderr,
+                        )
+                        print(
+                            "   3. Make sure at least one Redirect URI is set (e.g. http://localhost:8888/callback)",
+                            file=sys.stderr,
+                        )
+                        raise
                     print(f"⚠️ Error: {e}", file=sys.stderr)
                     self.log_failure(song.url, str(e))
                     failed += 1
@@ -229,32 +289,59 @@ class SpotifyDownloader(BaseDownloader):
                 print(f"   Failed: {failed} (see {self.config.failed_log})")
 
         except Exception as e:
+            err_str = str(e)
+            if "401" in err_str or "authentication required" in err_str.lower():
+                print("❌ Spotify authentication failed (401)", file=sys.stderr)
+                print(
+                    "   Your Spotify API credentials appear to be invalid.",
+                    file=sys.stderr,
+                )
+                print(
+                    "   Please check your client_id and client_secret in config.yaml:",
+                    file=sys.stderr,
+                )
+                print(
+                    "   1. Go to https://developer.spotify.com/dashboard",
+                    file=sys.stderr,
+                )
+                print(
+                    "   2. Open your app → Settings → regenerate Client Secret if needed",
+                    file=sys.stderr,
+                )
+                print(
+                    "   3. Make sure at least one Redirect URI is set (e.g. http://localhost:8888/callback)",
+                    file=sys.stderr,
+                )
+                raise
             print(f"❌ Error: {e}", file=sys.stderr)
             self.log_failure(url, str(e))
             raise
 
-    def _find_downloaded_file(self, song: Song, format: str) -> Optional[Path]:
+    def _find_downloaded_file(
+        self,
+        song: Song,
+        format: str,
+        spotdl_result: Optional[tuple] = None,
+    ) -> Optional[Path]:
         """Find the downloaded file for a song.
 
         Args:
             song: Song object
             format: Expected format
+            spotdl_result: Return value of a prior self.spotdl.download(song) call.
+                           When provided, its path is checked first so we avoid
+                           re-triggering a second (unnecessary) download.
 
         Returns:
             Path to downloaded file or None
         """
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
-        # First, try to download the song and get the exact file path from spotdl
-        try:
-            result = self.spotdl.download(song)
-            if result and len(result) >= 2:
-                file_path = result[1]
-                if isinstance(file_path, Path) and file_path.exists():
-                    return file_path
-        except Exception as e:
-            # If spotdl download fails, falling back to file search
-            logger.debug(f"spotdl download failed: {e}")  # nosec B110
+        # Prefer the path returned directly by spotdl (no second download needed).
+        if spotdl_result and len(spotdl_result) >= 2:
+            file_path = spotdl_result[1]
+            if isinstance(file_path, Path) and file_path.exists():
+                return file_path
 
         # Fallback: search for files containing the song title
         # Use a more reasonable time window (10 minutes) to account for existing files
@@ -396,13 +483,20 @@ class SpotifyDownloader(BaseDownloader):
                 # Move to final location
                 temp_file.rename(final_path)
                 
-                # Add provenance metadata (including ISRC from Spotify)
-                # When downloaded from YouTube via yt-dlp with format 251 -> M4A conversion
+                # ORIGINAL_BITRATE = source stream bitrate (what YouTube
+                # delivered), not our re-encoded output.  yt-dlp reports this
+                # as "abr" (average bitrate of the selected format).
+                # Format 251 (Opus) ≈ 160 kbps; format 140 (M4A) ≈ 128 kbps.
+                # Fall back to None if yt-dlp doesn't expose it.
+                source_bitrate_kbps = info.get("abr") or None
+                if source_bitrate_kbps is not None:
+                    source_bitrate_kbps = int(source_bitrate_kbps)
+
                 self._add_provenance_metadata(
                     final_path,
                     song.url,
                     format,
-                    info.get("abr", 192),  # Use reported bitrate or default to 192
+                    source_bitrate_kbps,
                     playlist_url,
                     isrc=song.isrc,
                 )
@@ -459,13 +553,22 @@ class SpotifyDownloader(BaseDownloader):
             if file_path != final_path:
                 file_path.rename(final_path)
 
+            # ORIGINAL_BITRATE records the source quality ceiling, not our
+            # output.  spotdl prefers format 251 (Opus ~160 kbps) and converts
+            # it to M4A 192 kbps; if 251 isn't available it falls back to
+            # format 140 (native M4A ~128 kbps).  Infer which was used from
+            # the output file's measured bitrate: ≥180 kbps → 251, else 140.
+            from ..quality import get_audio_info
+            audio_info = get_audio_info(final_path)
+            output_kbps = (audio_info["bitrate"] // 1000) if audio_info else 0
+            source_bitrate_kbps = 160 if output_kbps >= 180 else 128
+
             # Add provenance metadata
-            # Spotify via spotdl uses YouTube, so bitrate is typically 128kbps
             self._add_provenance_metadata(
                 final_path,
                 song.url,
-                final_path.suffix[1:],  # Get format from file extension
-                128,  # Spotify via spotdl downloads at ~128kbps from YouTube
+                final_path.suffix[1:],
+                source_bitrate_kbps,
                 playlist_url,
                 isrc=song.isrc,
             )
