@@ -67,11 +67,33 @@ class SoundCloudDownloader(YouTubeDownloader):
             try:
                 info = ydl.extract_info(url, download=True)
 
-                # Process the download
-                if self._process_download(info, audio_format):
+                # Handle playlists vs single tracks
+                if info.get("_type") == "playlist":
+                    entries = info.get("entries", [])
+                    total = len(entries)
+                    success = 0
+                    failed = 0
+
+                    for idx, entry in enumerate(entries, 1):
+                        if not entry:
+                            continue
+                        print(f"[{idx}/{total}] Processing: {entry.get('title', 'Unknown')}")
+                        if self._process_download(entry, audio_format):
+                            success += 1
+                        else:
+                            failed += 1
+                        print()
+
+                    print("━" * 60)
                     print("✅ Download complete")
+                    print(f"   Success: {success}")
+                    if failed > 0:
+                        print(f"   Failed: {failed} (see {self.config.failed_log})")
                 else:
-                    print("❌ Download failed", file=sys.stderr)
+                    if self._process_download(info, audio_format):
+                        print("✅ Download complete")
+                    else:
+                        print("❌ Download failed", file=sys.stderr)
 
             except Exception as e:
                 print(f"❌ Download failed: {e}", file=sys.stderr)
