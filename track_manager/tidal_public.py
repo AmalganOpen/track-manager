@@ -103,6 +103,16 @@ class TidalPublicClient:
                 params=params,
                 timeout=10,
             )
+            if response.status_code == 400:
+                try:
+                    detail = response.json().get("message") or response.text[:120]
+                except Exception:
+                    detail = response.text[:120]
+                msg = f"Track not indexed by song.link"
+                if detail:
+                    msg += f" ({detail})"
+                print(f"ℹ️ {msg}", file=sys.stderr)
+                return None
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
