@@ -4,12 +4,22 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 
 from .config import Config
 from .songlink import SongLinkClient
 from .sources import direct, soundcloud, spotify, youtube
 from .rate_limiter import spotify_rate_limit, dab_rate_limit
+
+
+_TRACKING_PARAMS = {"si", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"}
+
+
+def _strip_tracking_params(url: str) -> str:
+    """Remove known tracking/optional parameters from a URL before processing."""
+    parsed = urlparse(url)
+    qs = {k: v for k, v in parse_qs(parsed.query).items() if k not in _TRACKING_PARAMS}
+    return urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
 
 
 class Downloader:
@@ -786,6 +796,7 @@ class Downloader:
             show_header: Print source/output-directory header lines.  Set to
                 False when the caller (e.g. upgrade) manages its own context.
         """
+        url = _strip_tracking_params(url)
         source_type = self.detect_source(url)
 
         if show_header:
