@@ -268,6 +268,74 @@ class BaseDownloader(ABC):
             file_path, self.output_dir, self.config.duplicate_handling
         )
 
+    def check_duplicate_for(
+        self,
+        artist: Optional[str],
+        title: Optional[str],
+        exclude_path: Optional[Path] = None,
+    ) -> bool:
+        """Check for a duplicate using known artist/title metadata.
+
+        Unlike check_duplicate(), this does not re-read tags from the file,
+        which is important when the temp file may not have metadata embedded yet
+        or when performing a pre-download check.
+
+        Args:
+            artist: Artist name
+            title: Track title
+            exclude_path: Optional path to exclude from results (the file being checked)
+
+        Returns:
+            True if should skip (duplicate found), False to keep
+        """
+        from ..duplicates import find_duplicates
+
+        if not artist or not title:
+            return False
+
+        duplicates = find_duplicates(artist, title, self.output_dir)
+        if exclude_path is not None:
+            duplicates = [d for d in duplicates if d.resolve() != exclude_path.resolve()]
+
+        if not duplicates:
+            return False
+
+        handling = self.config.duplicate_handling
+
+        if handling == "skip":
+            print(f"⏭️ Skipped (already in library): {artist} - {title}")
+            return True
+
+        elif handling == "keep":
+            return False
+
+        else:  # interactive
+            print(f"\n⚠️ Duplicate track detected!")
+            print(f"  Artist: {artist}")
+            print(f"  Title: {title}")
+            print(f"\nExisting files:")
+            for i, dup in enumerate(duplicates, 1):
+                print(f"  {i}. {dup.name}")
+
+            print(f"\nWhat would you like to do?")
+            print(f"  [s] Skip new file (keep existing)")
+            print(f"  [k] Keep both")
+            print(f"  [r] Replace existing with new file", flush=True)
+
+            while True:
+                choice = input("Choice [s/k/r]: ").lower().strip()
+                if choice == "s":
+                    return True
+                elif choice == "k":
+                    return False
+                elif choice == "r":
+                    for dup in duplicates:
+                        print(f"Removing: {dup.name}")
+                        dup.unlink()
+                    return False
+                else:
+                    print("Invalid choice. Please enter s, k, or r.")
+
     def flag_metadata_review(self, file_path: Path, reason: str, url: str = ""):
         """Flag file for metadata review.
 

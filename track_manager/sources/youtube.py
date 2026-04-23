@@ -411,11 +411,10 @@ class YouTubeDownloader(BaseDownloader):
                         info.get("webpage_url", ""),
                     )
 
-                # Check for duplicates
-                if self.check_duplicate(temp_file):
-                    # User chose to skip
+                # Check for duplicates using already-computed metadata so the
+                # check works even if the temp file has no embedded tags yet.
+                if self.check_duplicate_for(artist, title, exclude_path=temp_file):
                     temp_file.unlink()
-                    print("⏭️ Skipped (duplicate)")
                     return True
 
                 # Move to final location

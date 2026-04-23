@@ -646,17 +646,37 @@ class Downloader:
         import subprocess
 
         from mutagen.flac import FLAC
+        from mutagen.mp4 import MP4
 
         m4a_path = flac_path.with_suffix(".m4a")
 
         try:
+            # Check if the file is already an MP4/M4A container despite the .flac extension
+            # (TIDAL sometimes serves AAC files with a .flac extension)
+            already_m4a = False
+            try:
+                MP4(str(flac_path))
+                already_m4a = True
+            except Exception:
+                pass
+
+            if already_m4a:
+                print(f"ℹ️ File is already M4A (TIDAL served AAC with .flac extension), renaming...")
+                flac_path.rename(m4a_path)
+                self._apply_m4a_metadata(m4a_path, metadata, provenance, None)
+                print(f"✅ Renamed to M4A and applied metadata")
+                return m4a_path
+
             print(f"🔄 Converting to M4A (256kbps AAC)...")
 
             # Extract cover art from FLAC before conversion (if embedded)
-            flac_audio = FLAC(str(flac_path))
             cover_data = None
-            if flac_audio.pictures:
-                cover_data = flac_audio.pictures[0].data
+            try:
+                flac_audio = FLAC(str(flac_path))
+                if flac_audio.pictures:
+                    cover_data = flac_audio.pictures[0].data
+            except Exception:
+                pass  # Not a valid FLAC or no cover art; proceed without it
 
             cmd = [
                 "ffmpeg",

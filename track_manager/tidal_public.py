@@ -18,12 +18,12 @@ class TidalPublicClient:
     """Client for public TIDAL API endpoints (community-hosted)."""
 
     # List of public API endpoints (fallback if one fails).
-    # Ordered by reliability; broken/suspended endpoints removed.
+    # Ordered by current reliability (re-evaluated periodically).
     ENDPOINTS = [
+        "https://triton.squid.wtf",
         "https://wolf.qqdl.site",
         "https://api.monochrome.tf",
         "https://tidal-api.binimum.org",
-        # "https://triton.squid.wtf",  # SSL cert expired
     ]
 
     def __init__(self, endpoint_index: int = 0):

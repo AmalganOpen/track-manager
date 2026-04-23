@@ -127,6 +127,7 @@ class SoundCloudDownloader(YouTubeDownloader):
 
             track_url = entry.get("url") or entry.get("webpage_url")
             title = entry.get("title", "Unknown")
+            uploader = entry.get("uploader") or entry.get("channel")
 
             if not track_url:
                 print(f"[{idx}/{total}] ⚠️ No URL for: {title}", file=sys.stderr)
@@ -135,6 +136,13 @@ class SoundCloudDownloader(YouTubeDownloader):
                 continue
 
             label = f"[{idx}/{total}] {title}"
+
+            # Pre-download name check: avoids a full download for obvious dupes.
+            if self.check_duplicate_for(uploader, title):
+                success += 1
+                print()
+                continue
+
             if self._download_single(track_url, audio_format, playlist_url=url, label=label):
                 success += 1
             else:
