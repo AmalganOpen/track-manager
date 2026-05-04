@@ -1,48 +1,175 @@
-"""Public TIDAL API integration (no credentials required)."""
+"""Public TIDAL API integration (no credentials required).
+
+Endpoint discovery: the binimum/hifi-api ecosystem (community-hosted TIDAL
+proxies) is volatile — operators rotate, OAuth refresh tokens expire,
+hosts get retired weekly. Rather than maintain a hand-curated list, we
+fetch the canonical instance list from monochrome.tf, the most active
+frontend in the ecosystem, which publishes its current pool at
+`https://monochrome.tf/instances.json`. That list is split into:
+  - "api" hosts:        for /info/, /search/, /album/, /artist/, /lyrics/.
+                        Most run on free TIDAL preview tier, no OAuth needed.
+  - "streaming" hosts:  for /track/. Need the operator's paid TIDAL OAuth
+                        refresh token to return full audio. Working set
+                        flips frequently.
+The list is fetched once per process, disk-cached for `_INSTANCES_TTL`,
+and falls back to a small hardcoded set when monochrome.tf is unreachable.
+See docs/tidal-endpoints.md for the full testing/maintenance protocol.
+"""
 
 import os
 import sys
+import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 import base64
 import json
 
 import requests
-from .rate_limiter import songlink_rate_limit, tidal_rate_limit
+from .rate_limiter import songlink_rate_limit, songlink_note_throttle, tidal_rate_limit
 
-_CACHE_FILE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "track-manager" / "tidal_id_cache.json"
+_CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "track-manager"
+_CACHE_FILE = _CACHE_DIR / "tidal_id_cache.json"
+_INSTANCES_CACHE_FILE = _CACHE_DIR / "monochrome_instances.json"
+_INSTANCES_URL = "https://monochrome.tf/instances.json"
+_INSTANCES_TTL = 6 * 3600  # 6 hours; monochrome.tf updates a few times a day
+
+# Hardcoded last-resort fallback if monochrome.tf is unreachable AND no
+# disk cache exists. Don't bother grooming this list — the live source
+# is the one that gets updated. This just keeps us afloat for the first
+# run if the user has no network or monochrome.tf itself is down.
+_HARDCODED_FALLBACK = {
+    "api": [
+        "https://eu-central.monochrome.tf",
+        "https://us-west.monochrome.tf",
+        "https://api.monochrome.tf",
+    ],
+    "streaming": [
+        "https://hifi.p1nkhamster.xyz",
+        "https://eu-central.monochrome.tf",
+    ],
+}
+
+
+def _normalize(url: str) -> str:
+    """Strip trailing slash so endpoint comparisons / set ops are stable."""
+    return url.rstrip("/")
+
+
+def _fetch_instances() -> Tuple[Dict[str, List[str]], str]:
+    """Return (`{api: [...], streaming: [...]}`, source_label).
+
+    source_label is "fresh", "cache", or "fallback" — purely for logging.
+    Resolution order:
+      1. Live fetch from monochrome.tf (cache fresh result on disk).
+      2. Disk cache, even if stale (better than nothing).
+      3. Hardcoded fallback baked into this module.
+    """
+    # Step 1: try live fetch if cache is missing or older than TTL
+    use_live = True
+    if _INSTANCES_CACHE_FILE.exists():
+        try:
+            age = time.time() - _INSTANCES_CACHE_FILE.stat().st_mtime
+            if age < _INSTANCES_TTL:
+                # Cache is fresh enough — skip the network call entirely
+                data = json.loads(_INSTANCES_CACHE_FILE.read_text())
+                if isinstance(data.get("api"), list) and isinstance(data.get("streaming"), list):
+                    return _normalize_instances(data), "cache"
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    if use_live:
+        try:
+            r = requests.get(_INSTANCES_URL, timeout=8)
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data.get("api"), list) and isinstance(data.get("streaming"), list):
+                try:
+                    _INSTANCES_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    _INSTANCES_CACHE_FILE.write_text(json.dumps(data, indent=2))
+                except OSError:
+                    pass  # disk-cache write is best-effort
+                return _normalize_instances(data), "fresh"
+        except (requests.RequestException, ValueError, KeyError):
+            pass
+
+    # Step 2: stale cache as fallback
+    if _INSTANCES_CACHE_FILE.exists():
+        try:
+            data = json.loads(_INSTANCES_CACHE_FILE.read_text())
+            if isinstance(data.get("api"), list) and isinstance(data.get("streaming"), list):
+                return _normalize_instances(data), "cache"
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # Step 3: hardcoded fallback
+    return _normalize_instances(_HARDCODED_FALLBACK), "fallback"
+
+
+def _normalize_instances(data: Dict) -> Dict[str, List[str]]:
+    """Strip trailing slashes and dedupe while preserving order."""
+    out: Dict[str, List[str]] = {}
+    for key in ("api", "streaming"):
+        seen = set()
+        clean: List[str] = []
+        for url in data.get(key, []) or []:
+            n = _normalize(url)
+            if n and n not in seen:
+                seen.add(n)
+                clean.append(n)
+        out[key] = clean
+    return out
 
 
 class TidalPublicClient:
-    """Client for public TIDAL API endpoints (community-hosted)."""
+    """Client for public TIDAL API endpoints (community-hosted).
 
-    # List of public API endpoints (fallback if one fails).
-    # Ordered by current reliability (re-evaluated periodically).
-    ENDPOINTS = [
-        "https://triton.squid.wtf",
-        "https://wolf.qqdl.site",
-        "https://api.monochrome.tf",
-        "https://tidal-api.binimum.org",
-    ]
+    Uses two separate endpoint pools, populated from monochrome.tf's
+    `instances.json` at construction time:
+      - `self.api_endpoints`       → for /info/, /search/, etc.
+      - `self.streaming_endpoints` → for /track/ (full audio)
 
-    def __init__(self, endpoint_index: int = 0):
+    On first success in each pool, the working endpoint is pinned for
+    the rest of the process so subsequent calls skip rotation.
+    """
+
+    def __init__(self, bypass_cache: bool = False):
         """Initialize TIDAL public client.
 
         Args:
-            endpoint_index: Which endpoint to use (0-based)
+            bypass_cache: When True, ignore the persistent ISRC→TIDAL-id
+                          cache entirely (no reads, no writes). Useful
+                          for forcing a fresh song.link lookup when a
+                          cached id has gone stale (track re-uploaded,
+                          region change, etc.). Delete
+                          `~/.cache/track-manager/tidal_id_cache.json`
+                          to throw the cache away permanently.
+
+        Note: the endpoint pools come from monochrome.tf/instances.json
+        (with disk-cached + hardcoded fallbacks); there's no
+        `endpoint_index` parameter anymore because the list is dynamic.
         """
-        if endpoint_index >= len(self.ENDPOINTS):
-            endpoint_index = 0
-        
-        self.endpoint = self.ENDPOINTS[endpoint_index]
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": "track-manager/0.2.0",
-            }
+        instances, source = _fetch_instances()
+        self.api_endpoints: List[str] = instances["api"]
+        self.streaming_endpoints: List[str] = instances["streaming"]
+        # `self.endpoint` is the pinned api endpoint (kept for backward
+        # compatibility); `self.streaming_endpoint` is the pinned /track/
+        # endpoint. Both update on first success in their respective pool.
+        self.endpoint: Optional[str] = self.api_endpoints[0] if self.api_endpoints else None
+        self.streaming_endpoint: Optional[str] = (
+            self.streaming_endpoints[0] if self.streaming_endpoints else None
         )
-        print(f"ℹ️ Using TIDAL endpoint: {self.endpoint}")
+
+        self.bypass_cache = bypass_cache
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": "track-manager/0.2.0"})
+
+        print(
+            f"ℹ️ TIDAL endpoints loaded from {source}: "
+            f"{len(self.api_endpoints)} api, {len(self.streaming_endpoints)} streaming"
+        )
+        if bypass_cache:
+            print("ℹ️ TIDAL ID cache disabled (--no-cache)")
         self._isrc_cache: Optional[dict] = None
 
     # ------------------------------------------------------------------
@@ -87,40 +214,68 @@ class TidalPublicClient:
         except OSError:
             pass  # non-fatal
 
-    def _songlink_request(self, params: dict) -> Optional[dict]:
+    def _songlink_request(self, params: dict, max_retries: int = 3) -> Optional[dict]:
         """Make a rate-limited request to the song.link API.
+
+        On 429 we honour the `Retry-After` header (or fall back to exponential
+        backoff: 30s, 60s, 120s) and persist the cooldown so concurrent / future
+        invocations also wait. Returning None too eagerly here means callers
+        fall through to the YouTube/spotdl path and we silently skip TIDAL.
 
         Args:
             params: Query parameters dict
+            max_retries: How many times to retry on 429 before giving up
 
         Returns:
             Parsed JSON response or None on failure
         """
-        try:
-            songlink_rate_limit()
-            response = self.session.get(
-                "https://api.song.link/v1-alpha.1/links",
-                params=params,
-                timeout=10,
-            )
-            if response.status_code == 400:
-                try:
-                    detail = response.json().get("message") or response.text[:120]
-                except Exception:
-                    detail = response.text[:120]
-                msg = f"Track not indexed by song.link"
-                if detail:
-                    msg += f" ({detail})"
-                print(f"ℹ️ {msg}", file=sys.stderr)
+        backoff_schedule = [30.0, 60.0, 120.0]
+        for attempt in range(max_retries + 1):
+            try:
+                songlink_rate_limit()
+                response = self.session.get(
+                    "https://api.song.link/v1-alpha.1/links",
+                    params=params,
+                    timeout=10,
+                )
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    try:
+                        wait = float(retry_after) if retry_after else backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
+                    except ValueError:
+                        wait = backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
+                    songlink_note_throttle(wait)
+                    if attempt >= max_retries:
+                        print(
+                            f"⚠️ song.link 429 after {max_retries} retries; giving up",
+                            file=sys.stderr,
+                        )
+                        return None
+                    print(
+                        f"⏳ song.link 429 (attempt {attempt + 1}/{max_retries}); sleeping {wait:.1f}s before retry...",
+                        file=sys.stderr,
+                    )
+                    time.sleep(wait)
+                    continue
+                if response.status_code == 400:
+                    try:
+                        detail = response.json().get("message") or response.text[:120]
+                    except Exception:
+                        detail = response.text[:120]
+                    msg = "Track not indexed by song.link"
+                    if detail:
+                        msg += f" ({detail})"
+                    print(f"ℹ️ {msg}", file=sys.stderr)
+                    return None
+                response.raise_for_status()
+                return response.json()
+            except requests.RequestException as e:
+                print(f"⚠️ song.link lookup failed: {e}", file=sys.stderr)
                 return None
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            print(f"⚠️ song.link lookup failed: {e}", file=sys.stderr)
-            return None
-        except (ValueError, KeyError) as e:
-            print(f"⚠️ song.link parsing failed: {e}", file=sys.stderr)
-            return None
+            except (ValueError, KeyError) as e:
+                print(f"⚠️ song.link parsing failed: {e}", file=sys.stderr)
+                return None
+        return None
 
     @staticmethod
     def _extract_tidal_id_from_response(data: dict) -> Optional[str]:
@@ -134,6 +289,8 @@ class TidalPublicClient:
 
         When the ISRC is cached no network call is made. Otherwise, song.link
         is queried using the ISRC platform directly (no Spotify URL needed).
+        When `self.bypass_cache` is True, the cache is ignored for both
+        reads and writes.
 
         Args:
             isrc: ISRC code (e.g. "SE5AJ1900779")
@@ -141,10 +298,11 @@ class TidalPublicClient:
         Returns:
             TIDAL track ID string if found, else None
         """
-        cache = self._load_isrc_cache()
-        if isrc in cache:
-            print(f"ℹ️ TIDAL ID found in cache (ISRC: {isrc})")
-            return cache[isrc]
+        if not self.bypass_cache:
+            cache = self._load_isrc_cache()
+            if isrc in cache:
+                print(f"ℹ️ TIDAL ID found in cache (ISRC: {isrc})")
+                return cache[isrc]
 
         # song.link supports ISRC as a first-class platform — no URL needed
         data = self._songlink_request(
@@ -154,7 +312,8 @@ class TidalPublicClient:
             return None
 
         tidal_id = self._extract_tidal_id_from_response(data)
-        if tidal_id:
+        if tidal_id and not self.bypass_cache:
+            cache = self._load_isrc_cache()
             cache[isrc] = tidal_id
             self._save_isrc_cache()
         return tidal_id
@@ -185,8 +344,19 @@ class TidalPublicClient:
             return None
         return self._extract_tidal_id_from_response(data)
 
+    def _rotation_order(self, pool: List[str], pinned: Optional[str]) -> List[str]:
+        """Return `pool` reordered so `pinned` comes first (if set & still in pool)."""
+        if pinned and pinned in pool:
+            return [pinned] + [e for e in pool if e != pinned]
+        return list(pool)
+
     def get_track_info(self, track_id: str) -> Optional[Dict]:
-        """Get track information by TIDAL ID.
+        """Get track information by TIDAL ID, rotating through the api pool.
+
+        Tries every api endpoint in turn; promotes the working one to be
+        the default for subsequent calls. Only HTTP 400 stops rotation
+        early — everything else (timeout, 401/403/404/429/5xx, parse errors)
+        rotates because the same upstream call may succeed on a different host.
 
         Args:
             track_id: TIDAL track ID
@@ -194,24 +364,40 @@ class TidalPublicClient:
         Returns:
             Track data if found
         """
-        try:
-            tidal_rate_limit()
-            response = self.session.get(
-                f"{self.endpoint}/info/",
-                params={"id": track_id},
-                timeout=30,
-            )
-            response.raise_for_status()
+        endpoints = self._rotation_order(self.api_endpoints, self.endpoint)
 
-            data = response.json()
-            return data.get("data")
+        for endpoint in endpoints:
+            if endpoint != self.endpoint:
+                print(f"ℹ️ Trying alternate TIDAL endpoint: {endpoint}", file=sys.stderr)
+            try:
+                tidal_rate_limit()
+                response = self.session.get(
+                    f"{endpoint}/info/",
+                    params={"id": track_id},
+                    timeout=10,
+                )
+                response.raise_for_status()
+                data = response.json().get("data")
+                if data is None:
+                    print(f"⚠️ TIDAL track info empty on {endpoint}", file=sys.stderr)
+                    continue
+                self.endpoint = endpoint
+                return data
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+                print(f"⚠️ TIDAL track info failed on {endpoint}: {e}", file=sys.stderr)
+                if status == 400:
+                    return None  # malformed request — same on every endpoint
+                continue  # 401/403/404/429/5xx → try next
+            except requests.RequestException as e:
+                print(f"⚠️ TIDAL track info failed on {endpoint}: {e}", file=sys.stderr)
+                continue
+            except (ValueError, KeyError) as e:
+                print(f"⚠️ TIDAL track info parsing failed on {endpoint}: {e}", file=sys.stderr)
+                continue
 
-        except requests.RequestException as e:
-            print(f"⚠️ TIDAL track info failed: {e}", file=sys.stderr)
-            return None
-        except (ValueError, KeyError) as e:
-            print(f"⚠️ TIDAL track info parsing failed: {e}", file=sys.stderr)
-            return None
+        print(f"❌ TIDAL track info: all {len(endpoints)} endpoints exhausted", file=sys.stderr)
+        return None
 
     def _download_track_from_endpoint(
         self, endpoint: str, track_id: str, output_path: Path, quality: str
@@ -225,7 +411,7 @@ class TidalPublicClient:
         response = self.session.get(
             f"{endpoint}/track/",
             params={"id": track_id, "quality": quality},
-            timeout=30,
+            timeout=8,
         )
         response.raise_for_status()
 
@@ -263,7 +449,17 @@ class TidalPublicClient:
     def download_track(
         self, track_id: str, output_path: Path, quality: str = "LOSSLESS"
     ) -> bool:
-        """Download track from TIDAL public API, rotating endpoints on 403.
+        """Download track via the streaming pool, rotating through every host.
+
+        Rotation policy:
+        - Success on any endpoint → pin it to `self.streaming_endpoint` and
+          return True.
+        - HTTP 400 → stop early; the request is malformed, same on every host.
+        - Everything else (timeouts, 401/403/404/429/5xx, MPD-only manifest,
+          missing/garbled manifest, JSON parse errors) → try the next endpoint.
+        Streaming hosts differ per-track because the upstream TIDAL session,
+        region, and tier-availability vary by host, so we keep going until
+        one works or the list is exhausted.
 
         Args:
             track_id: TIDAL track ID
@@ -273,33 +469,32 @@ class TidalPublicClient:
         Returns:
             True if successful
         """
-        # Build ordered endpoint list: current first, then the rest
-        endpoints = [self.endpoint] + [e for e in self.ENDPOINTS if e != self.endpoint]
+        endpoints = self._rotation_order(self.streaming_endpoints, self.streaming_endpoint)
 
         for endpoint in endpoints:
-            if endpoint != self.endpoint:
-                print(f"ℹ️ Trying alternate TIDAL endpoint: {endpoint}", file=sys.stderr)
+            if endpoint != self.streaming_endpoint:
+                print(f"ℹ️ Trying alternate TIDAL streaming endpoint: {endpoint}", file=sys.stderr)
             try:
-                success = self._download_track_from_endpoint(endpoint, track_id, output_path, quality)
-                if success:
-                    # Promote working endpoint so future calls skip failed ones
-                    self.endpoint = endpoint
+                if self._download_track_from_endpoint(endpoint, track_id, output_path, quality):
+                    self.streaming_endpoint = endpoint
                     return True
-                return False  # non-rotatable failure (bad manifest etc.)
+                # Inner returned False (no manifest, MPD-only, missing URL, …).
+                # Another endpoint may serve a different manifest type — try next.
+                continue
             except requests.HTTPError as e:
                 status = e.response.status_code if e.response is not None else None
-                print(f"❌ TIDAL download failed: {e}", file=sys.stderr)
-                if status == 403:
-                    continue  # track restricted on this endpoint, try next
-                if status is not None and status < 500:
-                    return False  # other 4xx — won't change on a different endpoint
-                continue  # 5xx or unknown → try next
+                print(f"❌ TIDAL download failed on {endpoint}: {e}", file=sys.stderr)
+                if status == 400:
+                    return False  # malformed request — won't change on a different endpoint
+                continue  # 401/403/404/429/5xx → try next
             except requests.RequestException as e:
-                # Connection-level failure (SSL error, timeout, DNS) — endpoint is broken
-                print(f"❌ TIDAL download failed: {e}", file=sys.stderr)
+                # Connection-level failure (SSL error, timeout, DNS) — try next
+                print(f"❌ TIDAL download failed on {endpoint}: {e}", file=sys.stderr)
                 continue
             except (ValueError, KeyError) as e:
-                print(f"❌ TIDAL download parsing failed: {e}", file=sys.stderr)
-                return False
+                # Unparseable response — could be transient, try next
+                print(f"❌ TIDAL download parsing failed on {endpoint}: {e}", file=sys.stderr)
+                continue
 
+        print(f"❌ TIDAL download: all {len(endpoints)} streaming endpoints exhausted", file=sys.stderr)
         return False
