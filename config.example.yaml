@@ -43,8 +43,10 @@ songlink:
 
 # Download preferences
 downloads:
-  # Default format: auto (prefer m4a), m4a, or mp3
-  # Note: Quality is always best available (320kbps for MP3, 256kbps for M4A/AAC)
+  # Default format: auto, aiff, m4a, or mp3
+  # 'auto' resolves to AIFF (uncompressed PCM 16-bit/44.1 kHz) for maximum
+  # gear compatibility. Files are larger but play on every device. Override
+  # to m4a (AAC 256k) or mp3 (CBR 320) when storage matters more.
   default_format: "auto"
 
   # Playlist confirmation threshold (ask before downloading large playlists)
