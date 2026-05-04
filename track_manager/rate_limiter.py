@@ -131,6 +131,17 @@ class PersistentRateLimiter:
                 # Drop timestamps outside the window
                 timestamps = [t for t in timestamps if now - t < self.window]
 
+                # Honour any pinned cooldown timestamp written by note_throttle()
+                cooldown_until = self._read_cooldown()
+                if cooldown_until and now < cooldown_until:
+                    wait = cooldown_until - now + 0.05
+                    print(
+                        f"⏳ song.link cooldown active: waiting {wait:.1f}s...",
+                        file=sys.stderr,
+                    )
+                    time.sleep(wait)
+                    continue
+
                 if len(timestamps) < self.max_calls:
                     timestamps.append(now)
                     self._write_timestamps(timestamps)
@@ -141,6 +152,31 @@ class PersistentRateLimiter:
                 wait = self.window - (now - oldest) + 0.05  # small buffer
                 print(f"⏳ song.link rate limit ({self.max_calls}/{self.window:.0f}s): waiting {wait:.1f}s...", file=sys.stderr)
                 time.sleep(wait)
+
+    def _cooldown_file(self) -> Path:
+        return self.state_file.with_suffix(self.state_file.suffix + ".cooldown")
+
+    def _read_cooldown(self) -> float:
+        try:
+            f = self._cooldown_file()
+            if f.exists():
+                return float(f.read_text().strip())
+        except (OSError, ValueError):
+            pass
+        return 0.0
+
+    def note_throttle(self, retry_after_seconds: float) -> None:
+        """Record an upstream-imposed cooldown so future acquires honour it.
+
+        Called when a 429 is observed so the next call (this process or any
+        other) waits out the server-side window before banging on the API.
+        """
+        try:
+            until = time.time() + max(retry_after_seconds, 0.0)
+            self._cooldown_file().parent.mkdir(parents=True, exist_ok=True)
+            self._cooldown_file().write_text(str(until))
+        except OSError:
+            pass
 
 
 _CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "track-manager"
@@ -153,7 +189,7 @@ _spotify_limiter = RateLimiter(calls_per_second=1.0, burst_size=3)
 # song.link: 10 req/min hard limit. Persistent across invocations so rapid
 # successive `tm` runs don't collectively exceed the limit.
 _songlink_limiter = PersistentRateLimiter(
-    max_calls=8,           # stay under the 10/min limit with headroom
+    max_calls=6,           # documented limit is 10/min but observed 429s at 8/min
     window_seconds=60.0,
     state_file=_CACHE_DIR / "songlink_calls.json",
 )
@@ -173,6 +209,11 @@ def spotify_rate_limit(show_progress: bool = False) -> None:
 def songlink_rate_limit(show_progress: bool = False) -> None:
     """Apply song.link API rate limiting (persistent across invocations)."""
     _songlink_limiter.acquire()
+
+
+def songlink_note_throttle(retry_after_seconds: float) -> None:
+    """Record a server-imposed cooldown so the next call waits it out."""
+    _songlink_limiter.note_throttle(retry_after_seconds)
 
 
 def dab_rate_limit(show_progress: bool = False) -> None:

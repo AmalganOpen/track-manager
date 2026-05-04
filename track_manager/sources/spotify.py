@@ -1,6 +1,7 @@
 """Spotify downloader using spotdl Python API."""
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +13,10 @@ except ImportError:
     print("Install with: pip install spotdl", file=sys.stderr)
     sys.exit(1)
 
+from .. import __version__
+from .. import audio as tm_audio
+from .. import blob as tm_blob
+from .. import pipeline as tm_pipeline
 from .base import BaseDownloader
 
 
@@ -115,13 +120,14 @@ class SpotifyDownloader(BaseDownloader):
 
         Args:
             url: Spotify URL (track, playlist, or album)
-            format: Output format (auto, m4a, mp3)
+            format: Output format ('auto', 'aiff', 'm4a', 'mp3')
         """
-        # Determine output format
-        if format == "auto":
-            audio_format = "m4a"
-        else:
-            audio_format = format
+        # `audio_format` is the format spotdl writes to disk in the fallback
+        # path. spotdl cannot produce AIFF, so until that path is rewritten to
+        # use the unified pipeline we keep its output at M4A. The smart-
+        # download path passes the user's `format` through unchanged so AIFF
+        # works when TIDAL has the track.
+        audio_format = "m4a" if format in ("auto", "aiff") else format
 
         print("🔍 Finding tracks on Spotify...")
         print(f"URL: {url}")
@@ -149,7 +155,7 @@ class SpotifyDownloader(BaseDownloader):
                     if self.parent_downloader:
                         print("🔄 Falling back to TIDAL download...")
                         success = self.parent_downloader.try_smart_download(
-                            url, audio_format
+                            url, format
                         )
                         if success:
                             return
@@ -208,7 +214,7 @@ class SpotifyDownloader(BaseDownloader):
                         
                         smart_success = self.parent_downloader.try_smart_download(
                             song.url,
-                            audio_format,
+                            format,
                             isrc=song.isrc,
                             spotify_metadata=spotify_metadata,
                             playlist_url=playlist_url,
@@ -226,13 +232,29 @@ class SpotifyDownloader(BaseDownloader):
                     self._stop_spotdl_progress()
 
                     if result:
-                        # Find downloaded file (will be .m4a after conversion).
-                        # Pass result so _find_downloaded_file uses spotdl's
-                        # returned path directly without a redundant re-download.
+                        # Find downloaded file (spotdl always emits the
+                        # intermediate format set in DownloaderOptions, i.e.
+                        # m4a). Pass `result` so we use spotdl's returned
+                        # path directly without a redundant re-download.
                         file_path = self._find_downloaded_file(song, audio_format, spotdl_result=result)
 
+                        # spotdl re-encodes its YouTube download to AAC@192
+                        # before handing it back, so probing the on-disk file
+                        # would record 192 kbps as the "source" — wrong.  Ask
+                        # yt-dlp directly about the upstream stream so the
+                        # blob carries the real source codec/bitrate (~128
+                        # for fmt 140, ~160 for fmt 251).
+                        upstream_codec, upstream_kbps = self._probe_upstream_youtube_source(
+                            song
+                        )
+
                         if file_path and self._process_download(
-                            file_path, song, audio_format, playlist_url
+                            file_path,
+                            song,
+                            format,
+                            playlist_url,
+                            source_codec_override=upstream_codec,
+                            source_bitrate_kbps_override=upstream_kbps,
                         ):
                             success += 1
                         else:
@@ -410,6 +432,74 @@ class SpotifyDownloader(BaseDownloader):
 
         return duplicates
 
+    def _probe_upstream_youtube_source(
+        self, song: Song
+    ) -> tuple[Optional[str], Optional[int]]:
+        """Ask yt-dlp what the upstream YouTube source for `song` actually is.
+
+        spotdl re-encodes its YouTube download to AAC@192 before handing the
+        file back, so probing the on-disk file would record 192 kbps as the
+        "source" — wrong.  We re-resolve the YouTube URL with the same format
+        selector spotdl uses (251 → 140 → bestaudio) and read ``acodec`` /
+        ``abr`` from the resolved format. ``download=False`` means this is a
+        single metadata HTTP request — no audio is fetched.
+
+        Returns ``(codec, bitrate_kbps)``; either field may be ``None`` when
+        yt-dlp doesn't expose it (we then leave the corresponding provenance
+        field unset rather than recording garbage).
+        """
+        download_url = getattr(song, "download_url", None)
+        if not download_url:
+            return (None, None)
+
+        try:
+            import yt_dlp
+        except ImportError:
+            return (None, None)
+
+        opts = {
+            # Match the selector configured on the spotdl DownloaderOptions
+            # (see __init__) so the inspected format is the same one spotdl
+            # actually downloaded.
+            "format": "251/140/bestaudio/best",
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(download_url, download=False)
+        except Exception as e:
+            print(f"  ⚠️  Upstream source probe failed: {e}", file=sys.stderr)
+            return (None, None)
+
+        if not isinstance(info, dict):
+            return (None, None)
+
+        # When a format selector resolves to a single stream, yt-dlp lifts
+        # that format's fields (acodec, abr, ext, …) onto the top-level info
+        # dict. Be defensive in case it doesn't.
+        codec = info.get("acodec") or None
+        if codec in (None, "none"):
+            codec = info.get("ext") or None
+        abr = info.get("abr")
+        if abr in (None, 0):
+            # Some yt-dlp versions only fill abr on entries inside `formats`.
+            for fmt in (info.get("formats") or []):
+                if fmt.get("format_id") == info.get("format_id") and fmt.get("abr"):
+                    abr = fmt["abr"]
+                    if not codec or codec == "none":
+                        codec = fmt.get("acodec") or fmt.get("ext")
+                    break
+
+        try:
+            abr_kbps = int(round(float(abr))) if abr else None
+        except (TypeError, ValueError):
+            abr_kbps = None
+
+        return (codec, abr_kbps)
+
     def _download_from_youtube(
         self, song: Song, format: str, playlist_url: Optional[str] = None
     ) -> bool:
@@ -510,68 +600,84 @@ class SpotifyDownloader(BaseDownloader):
             return False
 
     def _process_download(
-        self, file_path: Path, song: Song, format: str, playlist_url: Optional[str] = None
+        self,
+        file_path: Path,
+        song: Song,
+        target_format: str,
+        playlist_url: Optional[str] = None,
+        source_codec_override: Optional[str] = None,
+        source_bitrate_kbps_override: Optional[int] = None,
     ) -> bool:
-        """Process a downloaded file.
+        """Finalize a spotdl-produced file: encode/passthrough → tag → blob.
 
-        Args:
-            file_path: Path to downloaded file
-            song: Song object
-            format: Desired format
-            playlist_url: Optional playlist URL if from a playlist
+        spotdl writes a 192 kbps M4A (AAC); we treat that as the temp file
+        and route through the shared pipeline. With target=m4a this is a
+        rename (no generation loss); with target=aiff/mp3 it's a re-encode
+        from the AAC source.
 
-        Returns:
-            True if successful
+        ``source_codec_override`` / ``source_bitrate_kbps_override`` let the
+        caller supply the upstream YouTube source's actual codec/abr — those
+        are recorded as ``provenance.original_format`` / ``original_bitrate``
+        instead of probing spotdl's already-transcoded output (which would
+        misleadingly report spotdl's ~192 kbps target as the source).
         """
         try:
-            # Extract metadata
-            artist, title = self.extract_metadata(file_path)
+            target_format = tm_audio.resolve_format(target_format)
 
-            # Verify metadata is good
-            if not artist or not title:
-                # Use Spotify metadata as fallback
-                artist = song.artist
-                title = song.name
+            # spotdl always emits a complete file with embedded tags. Use its
+            # written file as our temp; we will replace it with the
+            # canonical-named output in target_format.
+            if not file_path.exists():
+                print(f"⚠️ spotdl output file not found: {file_path}")
+                return False
 
-                # Flag for review
-                self.flag_metadata_review(
-                    file_path, "Missing or incomplete metadata from Spotify", song.url
-                )
+            # Trust the upstream override when given (real source quality).
+            # Fall back to probing spotdl's output only when no override is
+            # available — that's the legacy behaviour and produces a known-
+            # incorrect value (spotdl's transcode bitrate, not the source).
+            if source_codec_override or source_bitrate_kbps_override:
+                source_codec = source_codec_override
+                source_bitrate_kbps = source_bitrate_kbps_override
+            else:
+                probed_source = tm_audio.probe_audio(file_path)
+                source_codec = probed_source.get("codec")
+                source_bitrate_kbps = probed_source.get("bitrate_kbps")
 
-            # Create final filename
-            final_name = self.create_filename(artist, title, file_path.suffix[1:])
-            final_path = self.output_dir / final_name
+            doc = self._build_spotify_doc(
+                song,
+                playlist_url=playlist_url,
+                source_codec=source_codec,
+                source_bitrate_kbps=source_bitrate_kbps,
+            )
 
-            # Check for duplicates
-            if self.check_duplicate(file_path):
-                # User chose to skip
+            # Pre-finalize duplicate check using known artist/title.
+            if self.check_duplicate_for(
+                doc["track"]["artist_string"],
+                doc["track"]["title"],
+                exclude_path=file_path,
+            ):
                 file_path.unlink()
                 print("⏭️ Skipped (duplicate)")
                 return True
 
-            # Rename if needed
-            if file_path != final_path:
-                file_path.rename(final_path)
-
-            # ORIGINAL_BITRATE records the source quality ceiling, not our
-            # output.  spotdl prefers format 251 (Opus ~160 kbps) and converts
-            # it to M4A 192 kbps; if 251 isn't available it falls back to
-            # format 140 (native M4A ~128 kbps).  Infer which was used from
-            # the output file's measured bitrate: ≥180 kbps → 251, else 140.
-            from ..quality import get_audio_info
-            audio_info = get_audio_info(final_path)
-            output_kbps = (audio_info["bitrate"] // 1000) if audio_info else 0
-            source_bitrate_kbps = 160 if output_kbps >= 180 else 128
-
-            # Add provenance metadata
-            self._add_provenance_metadata(
-                final_path,
-                song.url,
-                final_path.suffix[1:],
-                source_bitrate_kbps,
-                playlist_url,
-                isrc=song.isrc,
+            final_name = self.create_filename(
+                doc["track"]["artist_string"],
+                doc["track"]["title"],
+                target_format,
+                fallback=file_path.stem,
             )
+            final_path = self.output_dir / final_name
+
+            # spotdl already embedded basic tags + cover art into the m4a.
+            # Pull the cover bytes out before encoding so we can re-embed
+            # them in the final file (a re-encode strips embedded artwork).
+            cover_data = self._extract_embedded_cover(file_path)
+
+            result = tm_pipeline.finalize(
+                file_path, final_path, doc, target_format, cover_data
+            )
+            if result is None:
+                return False
 
             print(f"✅ Saved: {final_name}")
             return True
@@ -579,3 +685,82 @@ class SpotifyDownloader(BaseDownloader):
         except Exception as e:
             print(f"⚠️ Error processing: {e}", file=sys.stderr)
             return False
+
+    def _build_spotify_doc(
+        self,
+        song: Song,
+        *,
+        playlist_url: Optional[str],
+        source_codec: Optional[str],
+        source_bitrate_kbps: Optional[int],
+    ) -> dict:
+        """Assemble the canonical metadata document for a spotdl download."""
+        doc = tm_blob.empty_document()
+
+        artists = list(getattr(song, "artists", []) or [])
+        if not artists and getattr(song, "artist", None):
+            artists = [song.artist]
+        doc["track"]["title"] = song.name
+        doc["track"]["artists"] = artists
+        doc["track"]["artist_string"] = ", ".join(artists) if artists else (song.artist or "")
+        if getattr(song, "album_name", None):
+            doc["track"]["album"] = song.album_name
+        if getattr(song, "album_artist", None):
+            doc["track"]["album_artist"] = song.album_artist
+        if getattr(song, "year", None):
+            doc["track"]["date"] = str(song.year)
+        if getattr(song, "genres", None):
+            genres = song.genres
+            if isinstance(genres, (list, tuple)) and genres:
+                doc["track"]["genre"] = genres[0]
+        if getattr(song, "track_number", None) is not None:
+            doc["track"]["track_number"] = song.track_number
+        if getattr(song, "disc_number", None) is not None:
+            doc["track"]["disc_number"] = song.disc_number
+        if getattr(song, "duration", None) is not None:
+            try:
+                doc["track"]["duration_seconds"] = float(song.duration)
+            except (TypeError, ValueError):
+                pass
+        if getattr(song, "isrc", None):
+            doc["track"]["isrc"] = song.isrc
+        if getattr(song, "publisher", None):
+            doc["track"]["label"] = song.publisher
+
+        if getattr(song, "song_id", None):
+            doc["identifiers"]["spotify_id"] = song.song_id
+
+        if getattr(song, "cover_url", None):
+            doc["cover_art"]["url"] = song.cover_url
+
+        doc["provenance"]["track_url"] = song.url
+        doc["provenance"]["playlist_url"] = playlist_url
+        doc["provenance"]["source"] = "spotify"
+        doc["provenance"]["original_format"] = source_codec
+        doc["provenance"]["original_bitrate"] = source_bitrate_kbps
+        doc["provenance"]["downloaded_at"] = datetime.now(timezone.utc).isoformat()
+        doc["provenance"]["tool_version"] = __version__
+
+        return doc
+
+    @staticmethod
+    def _extract_embedded_cover(file_path: Path) -> Optional[bytes]:
+        """Pull JPEG cover bytes out of a tagged audio file (M4A or MP3)."""
+        try:
+            suffix = file_path.suffix.lower()
+            if suffix in (".m4a", ".mp4"):
+                from mutagen.mp4 import MP4
+
+                tags = MP4(str(file_path)).tags
+                if tags and "covr" in tags and tags["covr"]:
+                    return bytes(tags["covr"][0])
+            elif suffix == ".mp3":
+                from mutagen.id3 import ID3
+
+                tags = ID3(str(file_path))
+                for frame in tags.getall("APIC"):
+                    if frame.data:
+                        return bytes(frame.data)
+        except Exception:
+            return None
+        return None

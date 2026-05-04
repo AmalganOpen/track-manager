@@ -2,11 +2,17 @@
 
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 
+from . import __version__
+from . import audio as tm_audio
+from . import blob as tm_blob
+from . import pipeline as tm_pipeline
 from .config import Config
+from .metadata import sanitize_filename
 from .songlink import SongLinkClient
 from .sources import direct, soundcloud, spotify, youtube
 from .rate_limiter import spotify_rate_limit, dab_rate_limit
@@ -25,17 +31,26 @@ def _strip_tracking_params(url: str) -> str:
 class Downloader:
     """Main downloader class that routes to appropriate source handler."""
 
-    def __init__(self, config: Config, output_dir: Optional[Path] = None, dumb: bool = False):
+    def __init__(
+        self,
+        config: Config,
+        output_dir: Optional[Path] = None,
+        dumb: bool = False,
+        bypass_cache: bool = False,
+    ):
         """Initialize downloader.
 
         Args:
             config: Configuration object
             output_dir: Override output directory
             dumb: If True, disable smart downloads
+            bypass_cache: If True, ignore the persistent TIDAL ISRC→ID cache
+                          (forces a fresh song.link lookup for every track).
         """
         self.config = config
         self.output_dir = output_dir or config.output_dir
         self.dumb = dumb
+        self.bypass_cache = bypass_cache
 
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -184,25 +199,15 @@ class Downloader:
     def _try_dab_music(
         self,
         isrc: str,
-        format: str,
+        target_format: str,
         spotify_metadata: Optional[dict] = None,
         track_url: Optional[str] = None,
         playlist_url: Optional[str] = None,
     ) -> bool:
         """Try to download from DAB Music using ISRC.
 
-        Args:
-            isrc: ISRC code
-            format: Output format
-            spotify_metadata: Optional Spotify metadata (for multi-artist support)
-            track_url: Original track URL
-            playlist_url: Playlist URL if from a playlist
-
-        Returns:
-            True if successful, False otherwise
+        Returns True if successful.
         """
-        from .provenance import DownloadProvenance
-        # Check if DAB Music credentials are configured
         email = self.config.dabmusic_email
         password = self.config.dabmusic_password
 
@@ -213,22 +218,18 @@ class Downloader:
         try:
             from .dabmusic import DABMusicClient
 
-            # Create client once and reuse it
             if self._dab_client is None:
                 print("🔐 Logging in to DAB Music...")
                 self._dab_client = DABMusicClient(email, password, self.config.dabmusic_endpoint)
-            
+
             print("🎵 Searching DAB Music...")
             client = self._dab_client
 
-            # Search by ISRC
             track = client.search_by_isrc(isrc)
-
             if not track:
                 print("ℹ️ Track not found on DAB Music")
                 return False
 
-            # Verify ISRC matches
             if track.get("isrc") != isrc:
                 print(f"⚠️ ISRC mismatch: expected {isrc}, got {track.get('isrc')}")
                 return False
@@ -236,52 +237,27 @@ class Downloader:
             print(f"✅ Found on DAB Music: {track['title']} by {track['artist']}")
             print(f"⬇️ Downloading FLAC from DAB Music...")
 
-            # Generate output path using existing naming convention
-            from .metadata import sanitize_filename
-
-            # Use Spotify metadata for filename (same as file metadata)
-            if spotify_metadata:
-                artist = ", ".join(spotify_metadata["artists"]) if spotify_metadata.get("artists") else track["artist"]
-                title = spotify_metadata.get("title", track["title"])
-            else:
-                artist = track["artist"]
-                title = track["title"]
-
-            artist = sanitize_filename(artist)
-            title = sanitize_filename(title)
-            output_path = self.output_dir / f"{artist} - {title}.flac"
-
-            # Download (quality 27 = FLAC)
-            success = client.download_track(track["id"], output_path, quality=27)
-
-            if success:
-                # Create provenance information
-                provenance = DownloadProvenance(
-                    track_url=track_url or f"isrc:{isrc}",
-                    playlist_url=playlist_url,
-                    source="dab",
-                    original_format="flac",
-                    original_bitrate=None,  # FLAC is lossless
-                )
-                
-                # Collect all metadata (don't apply to FLAC yet)
-                metadata = self._collect_dab_metadata(track, isrc, spotify_metadata)
-                
-                # Convert FLAC to M4A and apply all metadata at once
-                m4a_path = self._convert_to_m4a(output_path, metadata, provenance)
-                if m4a_path:
-                    print(f"✅ Downloaded and converted to M4A: {m4a_path}")
-                    print()
-                    return True
-                else:
-                    # Conversion failed, but FLAC is still there
-                    print(f"✅ Downloaded FLAC (conversion failed): {output_path}")
-                    print()
-                    return True
-            else:
+            temp_path = self.output_dir / f".tmp_dab_{isrc}.flac"
+            ok = client.download_track(track["id"], temp_path, quality=27)
+            if not ok:
                 print("❌ DAB Music download failed", file=sys.stderr)
                 print()
                 return False
+
+            doc = self._build_dab_doc(
+                track,
+                isrc,
+                spotify_metadata,
+                track_url=track_url or f"isrc:{isrc}",
+                playlist_url=playlist_url,
+            )
+            final_path = self._finalize_download(temp_path, doc, target_format)
+            if final_path is None:
+                return False
+
+            print(f"✅ Downloaded and saved as {final_path.suffix.upper()[1:]}: {final_path}")
+            print()
+            return True
 
         except Exception as e:
             print(f"⚠️ DAB Music error: {e}", file=sys.stderr)
@@ -290,104 +266,85 @@ class Downloader:
     def _try_tidal_public(
         self,
         url: str,
-        format: str,
+        target_format: str,
         spotify_metadata: Optional[dict] = None,
         playlist_url: Optional[str] = None,
         isrc: Optional[str] = None,
     ) -> bool:
-        """Try to download from public TIDAL API (no credentials required).
+        """Try to download from the public TIDAL API.
 
-        Args:
-            url: Track URL (any platform)
-            format: Output format
-            spotify_metadata: Optional Spotify metadata
-            playlist_url: Playlist URL if from a playlist
-            isrc: ISRC code if already known (used to skip song.link when cached)
-
-        Returns:
-            True if successful, False otherwise
+        Quality tiers (preference order):
+          LOSSLESS → FLAC; encoded to `target_format`.
+          HIGH     → AAC 320k in MP4; passthrough rename when target=='m4a'
+                     else encoded to `target_format`.
         """
-        from .provenance import DownloadProvenance
         from .tidal_public import TidalPublicClient
 
         try:
-            # Create client
-            if not hasattr(self, '_tidal_client'):
-                self._tidal_client = TidalPublicClient()
-            
+            if not hasattr(self, "_tidal_client"):
+                self._tidal_client = TidalPublicClient(bypass_cache=self.bypass_cache)
             client = self._tidal_client
 
             print("🎵 Looking up track on TIDAL...")
-            
-            # Get TIDAL ID — checks ISRC cache first, falls back to song.link
             tidal_id = client.get_tidal_id_from_url(url, isrc=isrc)
-            
             if not tidal_id:
                 print("ℹ️ Track not found on TIDAL")
                 return False
 
-            # Get track info
             track = client.get_track_info(tidal_id)
-            
             if not track:
                 print("ℹ️ Could not get track info from TIDAL")
                 return False
 
             print(f"✅ Found on TIDAL: {track['title']} by {track['artist']['name']}")
-            
-            # Generate output path using existing naming convention
-            from .metadata import sanitize_filename
 
-            # Use Spotify metadata for filename (same as file metadata)
-            if spotify_metadata:
-                artist = ", ".join(spotify_metadata["artists"]) if spotify_metadata.get("artists") else track["artist"]["name"]
-                title = spotify_metadata.get("title", track["title"])
-            else:
-                artist = track["artist"]["name"]
-                title = track["title"]
+            # The TIDAL public endpoint historically promised FLAC for
+            # quality=LOSSLESS, but at present it tends to serve AAC HIGH
+            # for both tiers. Don't trust the requested quality — write the
+            # response to a generic temp file and probe the bytes for truth.
+            QUALITY_TIERS = ("LOSSLESS", "HIGH")
 
-            artist = sanitize_filename(artist)
-            title = sanitize_filename(title)
-
-            # Collect metadata up front (needed regardless of quality tier used)
-            metadata = self._collect_tidal_metadata(track, spotify_metadata)
-
-            # Try quality tiers in preference order.
-            # LOSSLESS → FLAC download, re-encode to M4A 256k AAC.
-            # HIGH     → AAC 320k already in M4A container, tag in-place (no re-encode).
-            QUALITY_TIERS = [
-                ("LOSSLESS", ".flac"),
-                ("HIGH",     ".m4a"),
-            ]
-
-            for quality, ext in QUALITY_TIERS:
-                output_path = self.output_dir / f"{artist} - {title}{ext}"
-                success = client.download_track(tidal_id, output_path, quality=quality)
-                if not success:
-                    if quality != QUALITY_TIERS[-1][0]:
-                        print(f"ℹ️ LOSSLESS unavailable, trying HIGH quality...", file=sys.stderr)
+            for quality in QUALITY_TIERS:
+                temp_path = self.output_dir / f".tmp_tidal_{tidal_id}"
+                ok = client.download_track(tidal_id, temp_path, quality=quality)
+                if not ok:
+                    if quality != QUALITY_TIERS[-1]:
+                        print("ℹ️ LOSSLESS unavailable, trying HIGH quality...", file=sys.stderr)
                     continue
 
-                provenance = DownloadProvenance(
+                # Probe what we actually got. ffprobe sniffs magic bytes and
+                # ignores the extension, so a misnamed AAC blob still
+                # reports codec=aac.
+                probed = tm_audio.probe_audio(temp_path)
+                original_format = probed.get("codec")
+                original_bitrate = probed.get("bitrate_kbps")
+                if original_format and original_format != "flac":
+                    print(
+                        f"ℹ️ TIDAL returned {original_format.upper()}"
+                        f"{f' @ {original_bitrate} kbps' if original_bitrate else ''}"
+                        f" for quality={quality}",
+                        file=sys.stderr,
+                    )
+
+                doc = self._build_tidal_doc(
+                    track,
+                    spotify_metadata,
                     track_url=url,
                     playlist_url=playlist_url,
-                    source="tidal-public",
-                    original_format="flac" if quality == "LOSSLESS" else "aac",
-                    original_bitrate=None if quality == "LOSSLESS" else 320,
+                    original_format=original_format,
+                    original_bitrate=original_bitrate,
                 )
+                final_path = self._finalize_download(temp_path, doc, target_format)
+                if final_path is None:
+                    print("❌ TIDAL post-processing failed", file=sys.stderr)
+                    return False
 
-                if quality == "LOSSLESS":
-                    final_path = self._convert_to_m4a(output_path, metadata, provenance)
-                    if not final_path:
-                        # Conversion failed but FLAC is there — still a win
-                        print(f"✅ Downloaded FLAC (conversion failed): {output_path}")
-                        print()
-                        return True
-                    print(f"✅ Downloaded and converted to M4A: {final_path}")
-                else:
-                    self._apply_m4a_metadata(output_path, metadata, provenance)
-                    print(f"✅ Downloaded M4A (320k AAC): {output_path}")
-
+                print(
+                    f"✅ Downloaded TIDAL {quality}"
+                    f" ({original_format or 'unknown'}"
+                    f"{f' {original_bitrate}k' if original_bitrate else ''})"
+                    f" → {final_path.suffix.upper()[1:]}: {final_path}"
+                )
                 print()
                 return True
 
@@ -399,320 +356,162 @@ class Downloader:
             print(f"⚠️ TIDAL error: {e}", file=sys.stderr)
             return False
 
-    def _collect_tidal_metadata(
+    # ------------------------------------------------------------------
+    # Metadata document builders
+    # ------------------------------------------------------------------
+
+    def _build_tidal_doc(
         self,
         track: dict,
-        spotify_metadata: Optional[dict] = None,
+        spotify_metadata: Optional[dict],
+        *,
+        track_url: str,
+        playlist_url: Optional[str],
+        original_format: Optional[str],
+        original_bitrate: Optional[int],
     ) -> dict:
-        """Collect metadata from TIDAL download.
+        """Construct the canonical metadata document for a TIDAL download.
 
-        Args:
-            track: Track data from TIDAL
-            spotify_metadata: Spotify metadata (preferred source for all metadata)
-
-        Returns:
-            Dictionary of metadata to apply
+        `original_format` and `original_bitrate` should come from probing the
+        downloaded bytes — the TIDAL quality the call asked for is not a
+        reliable signal of what actually arrived.
         """
-        # Extract cover URL from TIDAL (always use TIDAL's cover art)
-        cover_url = None
-        if track.get("album", {}).get("cover"):
-            cover_id = track["album"]["cover"]
-            # TIDAL cover art URL pattern: replace dashes with slashes
-            cover_path = cover_id.replace("-", "/")
-            cover_url = f"https://resources.tidal.com/images/{cover_path}/1280x1280.jpg"
-        
-        # Prefer Spotify metadata over TIDAL when available
+        doc = tm_blob.empty_document()
+
+        # Display fields (Spotify wins when present; TIDAL fills the gaps).
         if spotify_metadata:
-            return {
-                "title": spotify_metadata.get("title"),
-                "artist": ", ".join(spotify_metadata["artists"]) if spotify_metadata.get("artists") else None,
-                "album": spotify_metadata.get("album"),
-                "date": spotify_metadata.get("date"),
-                "isrc": track.get("isrc"),  # Always use TIDAL's ISRC
-                "cover_url": cover_url,  # Always use TIDAL's cover art
-            }
-        
-        # Use TIDAL metadata as fallback
-        # Handle both single artist and multiple artists
-        artists = track.get("artists", [])
-        if artists:
-            artist = ", ".join([a["name"] for a in artists])
-        else:
-            artist = track.get("artist", {}).get("name")
-        
-        return {
-            "title": track.get("title"),
-            "artist": artist,
-            "album": track.get("album", {}).get("title"),
-            "date": track.get("streamStartDate", "").split("T")[0] if track.get("streamStartDate") else None,
-            "isrc": track.get("isrc"),
-            "cover_url": cover_url,
-        }
+            artists = list(spotify_metadata.get("artists") or [])
+            if artists:
+                doc["track"]["artists"] = artists
+                doc["track"]["artist_string"] = ", ".join(artists)
+            doc["track"]["title"] = spotify_metadata.get("title") or track.get("title")
+            doc["track"]["album"] = (
+                spotify_metadata.get("album") or track.get("album", {}).get("title")
+            )
+        if not doc["track"]["title"]:
+            doc["track"]["title"] = track.get("title")
+        if not doc["track"]["artists"]:
+            tidal_artists = track.get("artists") or []
+            if tidal_artists:
+                names = [a["name"] for a in tidal_artists]
+                doc["track"]["artists"] = names
+                doc["track"]["artist_string"] = ", ".join(names)
+            else:
+                name = track.get("artist", {}).get("name")
+                if name:
+                    doc["track"]["artists"] = [name]
+                    doc["track"]["artist_string"] = name
+        if not doc["track"]["album"]:
+            doc["track"]["album"] = track.get("album", {}).get("title")
 
-    def _collect_dab_metadata(
-        self,
-        track: dict,
-        isrc: str,
-        spotify_metadata: Optional[dict] = None,
-    ) -> dict:
-        """Collect metadata from DAB Music download.
-
-        Args:
-            track: Track data from DAB Music
-            isrc: ISRC code
-            spotify_metadata: Spotify metadata (preferred source for all metadata)
-
-        Returns:
-            Dictionary of metadata to apply
-        """
-        # Use Spotify metadata when available (it's always provided for DAB downloads)
-        if spotify_metadata:
-            artist_str = ", ".join(spotify_metadata["artists"]) if spotify_metadata.get("artists") else track.get("artist", "")
-            title = spotify_metadata.get("title", track.get("title", ""))
-            album = spotify_metadata.get("album", track.get("albumTitle", ""))
-        else:
-            # Fallback to DAB metadata (shouldn't happen in practice)
-            artist_str = track.get("artist", "")
-            title = track.get("title", "")
-            album = track.get("albumTitle", "")
-
-        # Collect all metadata
-        metadata = {
-            'title': title,
-            'artist': artist_str,
-            'album': album,
-            'date': track.get("releaseDate", ""),
-            'isrc': isrc,
-        }
-        
-        # Add optional fields
-        if track.get("upc"):
-            metadata['barcode'] = track["upc"]
-        if track.get("label"):
-            metadata['label'] = track["label"]
-        if track.get("albumCover"):
-            metadata['cover_url'] = track["albumCover"]
-        
-        return metadata
-    
-    def _apply_dab_metadata(
-        self,
-        file_path: Path,
-        track: dict,
-        isrc: str,
-        spotify_metadata: Optional[dict] = None,
-    ):
-        """Apply metadata to DAB Music download.
-        
-        DEPRECATED: Use _collect_dab_metadata + _convert_to_m4a instead.
-        This method is kept for backward compatibility but will be removed.
-
-        Args:
-            file_path: Path to downloaded file
-            track: Track data from DAB Music (used only for cover art fallback)
-            isrc: ISRC code
-            spotify_metadata: Spotify metadata (preferred source for all metadata)
-        """
-        try:
-            import requests
-            from mutagen.flac import FLAC
-
-            audio = FLAC(str(file_path))
-
-            # Collect metadata
-            metadata = self._collect_dab_metadata(track, isrc, spotify_metadata)
-            
-            # Apply to FLAC
-            audio["TITLE"] = metadata['title']
-            audio["ARTIST"] = metadata['artist']
-            audio["ALBUM"] = metadata['album']
-            audio["DATE"] = metadata.get('date', '')
-            audio["ISRC"] = metadata['isrc']
-
-            if metadata.get('barcode'):
-                audio["BARCODE"] = metadata['barcode']
-            if metadata.get('label'):
-                audio["LABEL"] = metadata['label']
-
-            audio.save()
-
-            # Download and embed cover art
-            cover_url = metadata.get('cover_url')
-            if cover_url:
-                try:
-                    response = requests.get(cover_url, timeout=10)
-                    response.raise_for_status()
-
-                    import base64
-
-                    from mutagen.flac import Picture
-
-                    picture = Picture()
-                    picture.type = 3  # Cover (front)
-                    picture.data = response.content
-                    picture.mime = "image/jpeg"
-
-                    audio.add_picture(picture)
-                    audio.save()
-
-                except Exception as e:
-                    print(f"⚠️ Failed to embed cover art: {e}", file=sys.stderr)
-
-            print(f"✅ Metadata applied (including ISRC: {isrc})")
-
-        except Exception as e:
-            print(f"⚠️ Failed to apply metadata: {e}", file=sys.stderr)
-
-    def _apply_m4a_metadata(
-        self,
-        m4a_path: Path,
-        metadata: dict,
-        provenance: Optional["DownloadProvenance"] = None,
-        cover_data: Optional[bytes] = None,
-    ) -> None:
-        """Apply metadata and optionally embed cover art into an existing M4A file.
-
-        Args:
-            m4a_path: Path to M4A file to tag in-place
-            metadata: Metadata dictionary to apply
-            provenance: Download provenance information
-            cover_data: Pre-loaded cover art bytes (fetched from URL if None)
-        """
-        from mutagen.mp4 import MP4, MP4Cover
-
-        m4a_audio = MP4(str(m4a_path))
-
-        if metadata.get('title'):
-            m4a_audio['\xa9nam'] = metadata['title']
-        if metadata.get('artist'):
-            m4a_audio['\xa9ART'] = metadata['artist']
-        if metadata.get('album'):
-            m4a_audio['\xa9alb'] = metadata['album']
-        if metadata.get('date'):
-            m4a_audio['\xa9day'] = metadata['date']
-
-        if metadata.get('isrc'):
-            m4a_audio['----:com.apple.iTunes:ISRC'] = metadata['isrc'].encode('utf-8')
-        if metadata.get('barcode'):
-            m4a_audio['----:com.apple.iTunes:BARCODE'] = metadata['barcode'].encode('utf-8')
-        if metadata.get('label'):
-            m4a_audio['----:com.apple.iTunes:LABEL'] = metadata['label'].encode('utf-8')
-
-        if provenance:
-            m4a_audio['----:com.apple.iTunes:TRACK_URL'] = provenance.track_url.encode('utf-8')
-            if provenance.playlist_url:
-                m4a_audio['----:com.apple.iTunes:PLAYLIST_URL'] = provenance.playlist_url.encode('utf-8')
-            m4a_audio['----:com.apple.iTunes:SOURCE'] = provenance.source.encode('utf-8')
-            m4a_audio['----:com.apple.iTunes:ORIGINAL_FORMAT'] = provenance.original_format.encode('utf-8')
-            if provenance.original_bitrate:
-                m4a_audio['----:com.apple.iTunes:ORIGINAL_BITRATE'] = str(provenance.original_bitrate).encode('utf-8')
-
-        if not cover_data and metadata.get('cover_url'):
+        if track.get("streamStartDate"):
+            doc["track"]["date"] = track["streamStartDate"].split("T")[0]
+        if track.get("isrc"):
+            doc["track"]["isrc"] = track["isrc"]
+        if track.get("trackNumber") is not None:
+            doc["track"]["track_number"] = track["trackNumber"]
+        if track.get("volumeNumber") is not None:
+            doc["track"]["disc_number"] = track["volumeNumber"]
+        if track.get("duration") is not None:
             try:
-                import requests as _requests
-                r = _requests.get(metadata['cover_url'], timeout=10)
-                r.raise_for_status()
-                cover_data = r.content
-            except Exception as e:
-                print(f"⚠️ Failed to download cover art: {e}")
-
-        if cover_data:
-            m4a_audio["covr"] = [MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)]
-
-        m4a_audio.save()
-
-        print(f"🔄 Applied metadata (ISRC: {metadata.get('isrc', 'N/A')})")
-        if provenance:
-            print(f"🔄 Added provenance (source: {provenance.source}, format: {provenance.original_format})")
-        if cover_data:
-            print(f"🔄 Embedded cover art")
-
-    def _convert_to_m4a(
-        self,
-        flac_path: Path,
-        metadata: dict,
-        provenance: Optional["DownloadProvenance"] = None,
-    ) -> Optional[Path]:
-        """Convert FLAC to M4A at 256kbps AAC and apply all metadata.
-
-        Args:
-            flac_path: Path to FLAC file
-            metadata: Metadata dictionary to apply
-            provenance: Download provenance information
-
-        Returns:
-            Path to M4A file if successful, None otherwise
-        """
-        import subprocess
-
-        from mutagen.flac import FLAC
-        from mutagen.mp4 import MP4
-
-        m4a_path = flac_path.with_suffix(".m4a")
-
-        try:
-            # Check if the file is already an MP4/M4A container despite the .flac extension
-            # (TIDAL sometimes serves AAC files with a .flac extension)
-            already_m4a = False
-            try:
-                MP4(str(flac_path))
-                already_m4a = True
-            except Exception:
+                doc["track"]["duration_seconds"] = float(track["duration"])
+            except (TypeError, ValueError):
                 pass
 
-            if already_m4a:
-                print(f"ℹ️ File is already M4A (TIDAL served AAC with .flac extension), renaming...")
-                flac_path.rename(m4a_path)
-                self._apply_m4a_metadata(m4a_path, metadata, provenance, None)
-                print(f"✅ Renamed to M4A and applied metadata")
-                return m4a_path
+        if track.get("id") is not None:
+            doc["identifiers"]["tidal_id"] = str(track["id"])
 
-            print(f"🔄 Converting to M4A (256kbps AAC)...")
+        if track.get("album", {}).get("cover"):
+            cover_path = track["album"]["cover"].replace("-", "/")
+            doc["cover_art"]["url"] = (
+                f"https://resources.tidal.com/images/{cover_path}/1280x1280.jpg"
+            )
 
-            # Extract cover art from FLAC before conversion (if embedded)
-            cover_data = None
-            try:
-                flac_audio = FLAC(str(flac_path))
-                if flac_audio.pictures:
-                    cover_data = flac_audio.pictures[0].data
-            except Exception:
-                pass  # Not a valid FLAC or no cover art; proceed without it
+        doc["provenance"]["track_url"] = track_url
+        doc["provenance"]["playlist_url"] = playlist_url
+        doc["provenance"]["source"] = "tidal-public"
+        doc["provenance"]["original_format"] = original_format
+        doc["provenance"]["original_bitrate"] = original_bitrate
+        doc["provenance"]["downloaded_at"] = datetime.now(timezone.utc).isoformat()
+        doc["provenance"]["tool_version"] = __version__
 
-            cmd = [
-                "ffmpeg",
-                "-i", str(flac_path),
-                "-vn",
-                "-c:a", "aac",
-                "-b:a", "256k",
-                "-ar", "48000",
-                "-movflags", "+faststart",
-                "-map_metadata", "0",
-                "-y",
-                str(m4a_path),
-            ]
+        return doc
 
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+    def _build_dab_doc(
+        self,
+        track: dict,
+        isrc: str,
+        spotify_metadata: Optional[dict],
+        *,
+        track_url: str,
+        playlist_url: Optional[str],
+    ) -> dict:
+        """Construct the canonical metadata document for a DAB Music download."""
+        doc = tm_blob.empty_document()
 
-            if not m4a_path.exists():
-                raise Exception("M4A file not created")
+        if spotify_metadata:
+            artists = list(spotify_metadata.get("artists") or [])
+            if artists:
+                doc["track"]["artists"] = artists
+                doc["track"]["artist_string"] = ", ".join(artists)
+            doc["track"]["title"] = spotify_metadata.get("title") or track.get("title")
+            doc["track"]["album"] = spotify_metadata.get("album") or track.get("albumTitle")
+        if not doc["track"]["title"]:
+            doc["track"]["title"] = track.get("title")
+        if not doc["track"]["artists"]:
+            artist = track.get("artist") or ""
+            if artist:
+                doc["track"]["artists"] = [artist]
+                doc["track"]["artist_string"] = artist
+        if not doc["track"]["album"]:
+            doc["track"]["album"] = track.get("albumTitle")
 
-            self._apply_m4a_metadata(m4a_path, metadata, provenance, cover_data)
+        if track.get("releaseDate"):
+            doc["track"]["date"] = track["releaseDate"]
+        doc["track"]["isrc"] = isrc
+        if track.get("label"):
+            doc["track"]["label"] = track["label"]
+        if track.get("trackNumber") is not None:
+            doc["track"]["track_number"] = track["trackNumber"]
 
-            flac_path.unlink()
-            print(f"✅ Converted to M4A and removed FLAC")
+        if track.get("upc"):
+            doc["identifiers"]["barcode"] = track["upc"]
 
-            return m4a_path
+        if track.get("albumCover"):
+            doc["cover_art"]["url"] = track["albumCover"]
 
-        except subprocess.CalledProcessError as e:
-            print(f"⚠️ FFmpeg conversion failed: {e.stderr}", file=sys.stderr)
-            return None
-        except Exception as e:
-            print(f"⚠️ Conversion error: {e}", file=sys.stderr)
-            return None
+        doc["provenance"]["track_url"] = track_url
+        doc["provenance"]["playlist_url"] = playlist_url
+        doc["provenance"]["source"] = "dab"
+        doc["provenance"]["original_format"] = "flac"
+        doc["provenance"]["original_bitrate"] = None
+        doc["provenance"]["downloaded_at"] = datetime.now(timezone.utc).isoformat()
+        doc["provenance"]["tool_version"] = __version__
 
-        except Exception as e:
-            print(f"⚠️ DAB Music error: {e}", file=sys.stderr)
-            return False
+        return doc
+
+    # ------------------------------------------------------------------
+    # Encode + tag + blob pipeline (shared by all smart-download sources)
+    # ------------------------------------------------------------------
+
+    def _finalize_download(
+        self,
+        temp_path: Path,
+        doc: dict,
+        target_format: str,
+        cover_data: Optional[bytes] = None,
+    ) -> Optional[Path]:
+        """Build a filename from the doc and run the shared finalize pipeline."""
+        artist_for_name = doc["track"].get("artist_string") or "Unknown"
+        title_for_name = doc["track"].get("title") or temp_path.stem
+        final_name = (
+            f"{sanitize_filename(artist_for_name)} - "
+            f"{sanitize_filename(title_for_name)}.{target_format}"
+        )
+        final_path = self.output_dir / final_name
+        return tm_pipeline.finalize(
+            temp_path, final_path, doc, target_format, cover_data
+        )
 
     def detect_source(self, url: str) -> str:
         """Detect source type from URL.
@@ -772,36 +571,36 @@ class Downloader:
         spotify_metadata: Optional[dict] = None,
         playlist_url: Optional[str] = None,
     ) -> bool:
-        """Try to download using smart download (ISRC → DAB Music).
+        """Try to download via the smart-download chain (TIDAL public API).
 
         Args:
             url: Track URL (for ISRC lookup if needed)
-            format: Output format
-            isrc: Pre-fetched ISRC (optional, will lookup if not provided)
+            format: Output format ('auto'/'aiff'/'m4a'/'mp3'); resolved here.
+            isrc: Pre-fetched ISRC (optional)
             spotify_metadata: Pre-fetched Spotify metadata (optional)
             playlist_url: Playlist URL if downloading from a playlist
 
         Returns:
-            True if downloaded successfully, False if should fallback to source
+            True if downloaded successfully, False if caller should fall back.
         """
-        # Skip smart download if dumb mode is enabled
         if self.dumb:
             return False
-        
+
+        target_format = tm_audio.resolve_format(format)
+
         if isrc:
             print(f"🔍 Using ISRC from Spotify: {isrc}")
-        
-        # Skip smart download for direct audio URLs
+
+        # Skip smart download for direct audio URLs.
         source_type = self.detect_source(url)
         if source_type == "direct":
             return False
-        
-        # Try public TIDAL API (no credentials required).
+
         # When ISRC is provided it is checked against the local cache first so
         # that song.link is only called once per track across all invocations.
         return self._try_tidal_public(
             url,
-            format,
+            target_format,
             spotify_metadata,
             playlist_url=playlist_url,
             isrc=isrc,
@@ -812,16 +611,18 @@ class Downloader:
 
         Args:
             url: URL to download from
-            format: Output format (auto, m4a, mp3)
+            format: Output format ('auto', 'aiff', 'm4a', 'mp3')
             show_header: Print source/output-directory header lines.  Set to
                 False when the caller (e.g. upgrade) manages its own context.
         """
         url = _strip_tracking_params(url)
         source_type = self.detect_source(url)
+        target_format = tm_audio.resolve_format(format)
 
         if show_header:
             print(f"🎵 Detected source: {source_type.title()}")
             print(f"📁 Output directory: {self.output_dir}")
+            print(f"🎚️  Target format: {target_format.upper()}")
             print()
 
         # Route to appropriate handler (handlers now manage smart downloads internally)

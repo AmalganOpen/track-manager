@@ -1,6 +1,8 @@
 """SoundCloud downloader using yt-dlp Python API.
 
-SoundCloud support via yt-dlp - similar to YouTube handler.
+Same shape as the YouTube handler: yt-dlp fetches bestaudio in its native
+container and writes the thumbnail alongside; encoding, tagging, and the
+metadata blob are handled by `tm_audio` / `tm_blob` downstream.
 """
 
 import sys
@@ -8,24 +10,15 @@ from typing import Optional
 
 import yt_dlp
 
+from .. import audio as tm_audio
 from .youtube import YouTubeDownloader
 
 
-def _sc_ydl_opts(output_dir, audio_format: str) -> dict:
-    """Return yt-dlp options for a single SoundCloud track download."""
+def _sc_ydl_opts(output_dir) -> dict:
+    """yt-dlp options for a single SoundCloud track download."""
     return {
         "format": "bestaudio/best",
         "writethumbnail": True,
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": audio_format,
-                "preferredquality": "128",
-            },
-            {
-                "key": "EmbedThumbnail",
-            },
-        ],
         "outtmpl": str(output_dir / ".tmp_%(id)s.%(ext)s"),
         "quiet": False,
         "no_warnings": False,
@@ -37,7 +30,7 @@ def _sc_ydl_opts(output_dir, audio_format: str) -> dict:
 class SoundCloudDownloader(YouTubeDownloader):
     """SoundCloud downloader using yt-dlp.
 
-    Inherits from YouTubeDownloader since yt-dlp handles both similarly.
+    Reuses the YouTube finalize pipeline (encode → tag → blob) via inheritance.
     SoundCloud can offer higher quality than YouTube (up to 256kbps on Go+).
 
     Per-track flow:
@@ -50,12 +43,12 @@ class SoundCloudDownloader(YouTubeDownloader):
     """
 
     def download(self, url: str, format: str = "auto"):
-        audio_format = "m4a" if format == "auto" else format
+        target_format = tm_audio.resolve_format(format)
 
         if "/sets/" in url:
-            self._download_playlist(url, audio_format)
+            self._download_playlist(url, target_format)
         else:
-            self._download_single(url, audio_format)
+            self._download_single(url, target_format)
 
     # ------------------------------------------------------------------
     # Single-track helpers
@@ -64,7 +57,7 @@ class SoundCloudDownloader(YouTubeDownloader):
     def _download_single(
         self,
         url: str,
-        audio_format: str,
+        target_format: str,
         playlist_url: Optional[str] = None,
         label: Optional[str] = None,
     ) -> bool:
@@ -78,17 +71,17 @@ class SoundCloudDownloader(YouTubeDownloader):
         if self.parent_downloader:
             print("🔗 Trying smart download...")
             if self.parent_downloader.try_smart_download(
-                url, audio_format, playlist_url=playlist_url
+                url, target_format, playlist_url=playlist_url
             ):
                 return True
 
             print("⬇️ Downloading from SoundCloud")
             print()
 
-        with yt_dlp.YoutubeDL(_sc_ydl_opts(self.output_dir, audio_format)) as ydl:
+        with yt_dlp.YoutubeDL(_sc_ydl_opts(self.output_dir)) as ydl:
             try:
                 info = ydl.extract_info(url, download=True)
-                return self._process_download(info, audio_format, playlist_url)
+                return self._process_download(info, target_format, playlist_url)
             except Exception as e:
                 print(f"❌ Download failed: {e}", file=sys.stderr)
                 self.log_failure(url, str(e))
@@ -98,7 +91,7 @@ class SoundCloudDownloader(YouTubeDownloader):
     # Playlist handling
     # ------------------------------------------------------------------
 
-    def _download_playlist(self, url: str, audio_format: str):
+    def _download_playlist(self, url: str, target_format: str):
         """Extract playlist entries flat, then process each track individually."""
         # Extract entries without downloading
         with yt_dlp.YoutubeDL(
@@ -143,7 +136,7 @@ class SoundCloudDownloader(YouTubeDownloader):
                 print()
                 continue
 
-            if self._download_single(track_url, audio_format, playlist_url=url, label=label):
+            if self._download_single(track_url, target_format, playlist_url=url, label=label):
                 success += 1
             else:
                 failed += 1
