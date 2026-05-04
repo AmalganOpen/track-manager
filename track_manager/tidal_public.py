@@ -214,13 +214,19 @@ class TidalPublicClient:
         except OSError:
             pass  # non-fatal
 
-    def _songlink_request(self, params: dict, max_retries: int = 3) -> Optional[dict]:
+    # Cap total time we'll spend on a single song.link lookup (cooldown +
+    # in-call retries combined). Beyond this, fall back to YouTube — better
+    # to take a YouTube rip than hang the whole batch on one track.
+    _SONGLINK_MAX_WAIT_PER_CALL = 45.0
+
+    def _songlink_request(self, params: dict, max_retries: int = 1) -> Optional[dict]:
         """Make a rate-limited request to the song.link API.
 
-        On 429 we honour the `Retry-After` header (or fall back to exponential
-        backoff: 30s, 60s, 120s) and persist the cooldown so concurrent / future
-        invocations also wait. Returning None too eagerly here means callers
-        fall through to the YouTube/spotdl path and we silently skip TIDAL.
+        On 429 we honour the `Retry-After` header (capped) and retry once.
+        The local rate limiter (`songlink_rate_limit`) already enforces a
+        persistent cooldown across calls/processes, so additional in-call
+        backoff stacking just wastes wall time before the inevitable
+        YouTube fallback.
 
         Args:
             params: Query parameters dict
@@ -229,7 +235,6 @@ class TidalPublicClient:
         Returns:
             Parsed JSON response or None on failure
         """
-        backoff_schedule = [30.0, 60.0, 120.0]
         for attempt in range(max_retries + 1):
             try:
                 songlink_rate_limit()
@@ -241,18 +246,21 @@ class TidalPublicClient:
                 if response.status_code == 429:
                     retry_after = response.headers.get("Retry-After")
                     try:
-                        wait = float(retry_after) if retry_after else backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
+                        wait = float(retry_after) if retry_after else 30.0
                     except ValueError:
-                        wait = backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
+                        wait = 30.0
+                    # Always persist the cooldown so other tracks in this run
+                    # (and follow-up `tm` invocations) wait it out instead of
+                    # immediately tripping another 429.
                     songlink_note_throttle(wait)
-                    if attempt >= max_retries:
+                    if attempt >= max_retries or wait > self._SONGLINK_MAX_WAIT_PER_CALL:
                         print(
-                            f"⚠️ song.link 429 after {max_retries} retries; giving up",
+                            f"⚠️ song.link 429 (Retry-After {wait:.0f}s); skipping TIDAL for this track",
                             file=sys.stderr,
                         )
                         return None
                     print(
-                        f"⏳ song.link 429 (attempt {attempt + 1}/{max_retries}); sleeping {wait:.1f}s before retry...",
+                        f"⏳ song.link 429; sleeping {wait:.1f}s before single retry...",
                         file=sys.stderr,
                     )
                     time.sleep(wait)
