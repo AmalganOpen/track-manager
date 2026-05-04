@@ -1,0 +1,60 @@
+{
+    "$schema_version": 1,
+    "track": {
+        "title": null,
+        "artists": [],
+        "artist_string": null,
+        "album": null,
+        "album_artist": null,
+        "date": null,
+        "genre": null,
+        "track_number": null,
+        "disc_number": null,
+        "duration_seconds": null,
+        "isrc": null,
+        "label": null
+    },
+    "identifiers": {
+        "barcode": null,
+        "spotify_id": null,
+        "tidal_id": null,
+        "musicbrainz_id": null
+    },
+    "cover_art": {
+        "url": null,
+        "sha256": null,
+        "embedded": false
+    },
+    "provenance": {
+        "track_url": null,
+        "playlist_url": null,
+        "source": null,
+        "original_format": null,
+        "original_bitrate": null,
+        "downloaded_at": null,
+        "tool_version": null,
+        "migrated_from": null,
+        "upgrade_attempts": 0,
+        "last_upgrade_attempt_at": null
+    },
+    "audio": {
+        "format": null,
+        "codec": null,
+        "bitrate_kbps": null,
+        "sample_rate": null,
+        "bit_depth": null,
+        "channels": null,
+        "size_bytes": null,
+        "sha256": null
+    },
+    "review": {
+        "needs_review": false,
+        "reason": null,
+        "flagged_at": null
+    },
+    "user": {
+        "tags": [],
+        "rating": null,
+        "notes": null
+    }
+}
