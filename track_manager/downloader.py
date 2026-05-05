@@ -196,6 +196,71 @@ class Downloader:
 
         return None, None
 
+    def _try_qobuz_public(
+        self,
+        url: str,
+        target_format: str,
+        spotify_metadata: Optional[dict] = None,
+        playlist_url: Optional[str] = None,
+        isrc: Optional[str] = None,
+    ) -> bool:
+        """Try to download from a public Qobuz proxy (lossless FLAC).
+
+        Requires an ISRC — Qobuz lookup is ISRC-only here. When no ISRC is
+        available the caller should fall through to TIDAL or YouTube.
+        Returns True on success.
+        """
+        if not isrc:
+            return False  # Qobuz requires ISRC; let caller try other sources
+
+        from .qobuz_public import QobuzPublicClient
+
+        try:
+            if not hasattr(self, "_qobuz_client"):
+                self._qobuz_client = QobuzPublicClient(bypass_cache=self.bypass_cache)
+            client = self._qobuz_client
+
+            print("🎵 Looking up track on Qobuz (by ISRC)...")
+            temp_path = self.output_dir / f".tmp_qobuz_{isrc}"
+            track = client.download_by_isrc(isrc, temp_path)
+            if not track:
+                print("ℹ️ Track not available via Qobuz")
+                return False
+
+            performer = (track.get("performer") or {}).get("name") or "?"
+            print(f"✅ Got from Qobuz: {track.get('title')!r} by {performer}")
+
+            # Probe the bytes — Qobuz consistently returns FLAC, but verify.
+            probed = tm_audio.probe_audio(temp_path)
+            original_format = probed.get("codec")
+            original_bitrate = probed.get("bitrate_kbps")
+
+            doc = self._build_qobuz_doc(
+                track,
+                isrc,
+                spotify_metadata,
+                track_url=url,
+                playlist_url=playlist_url,
+                original_format=original_format,
+                original_bitrate=original_bitrate,
+            )
+            final_path = self._finalize_download(temp_path, doc, target_format)
+            if final_path is None:
+                print("❌ Qobuz post-processing failed", file=sys.stderr)
+                return False
+
+            print(
+                f"✅ Downloaded Qobuz ({original_format or 'unknown'}"
+                f"{f' {original_bitrate}k' if original_bitrate else ''})"
+                f" → {final_path.suffix.upper()[1:]}: {final_path}"
+            )
+            print()
+            return True
+
+        except Exception as e:
+            print(f"⚠️ Qobuz error: {e}", file=sys.stderr)
+            return False
+
     def _try_dab_music(
         self,
         isrc: str,
@@ -302,55 +367,48 @@ class Downloader:
             # quality=LOSSLESS, but at present it tends to serve AAC HIGH
             # for both tiers. Don't trust the requested quality — write the
             # response to a generic temp file and probe the bytes for truth.
-            QUALITY_TIERS = ("LOSSLESS", "HIGH")
-
-            for quality in QUALITY_TIERS:
-                temp_path = self.output_dir / f".tmp_tidal_{tidal_id}"
-                ok = client.download_track(tidal_id, temp_path, quality=quality)
-                if not ok:
-                    if quality != QUALITY_TIERS[-1]:
-                        print("ℹ️ LOSSLESS unavailable, trying HIGH quality...", file=sys.stderr)
-                    continue
-
-                # Probe what we actually got. ffprobe sniffs magic bytes and
-                # ignores the extension, so a misnamed AAC blob still
-                # reports codec=aac.
-                probed = tm_audio.probe_audio(temp_path)
-                original_format = probed.get("codec")
-                original_bitrate = probed.get("bitrate_kbps")
-                if original_format and original_format != "flac":
-                    print(
-                        f"ℹ️ TIDAL returned {original_format.upper()}"
-                        f"{f' @ {original_bitrate} kbps' if original_bitrate else ''}"
-                        f" for quality={quality}",
-                        file=sys.stderr,
-                    )
-
-                doc = self._build_tidal_doc(
-                    track,
-                    spotify_metadata,
-                    track_url=url,
-                    playlist_url=playlist_url,
-                    original_format=original_format,
-                    original_bitrate=original_bitrate,
-                )
-                final_path = self._finalize_download(temp_path, doc, target_format)
-                if final_path is None:
-                    print("❌ TIDAL post-processing failed", file=sys.stderr)
-                    return False
-
-                print(
-                    f"✅ Downloaded TIDAL {quality}"
-                    f" ({original_format or 'unknown'}"
-                    f"{f' {original_bitrate}k' if original_bitrate else ''})"
-                    f" → {final_path.suffix.upper()[1:]}: {final_path}"
-                )
+            #
+            # Quality fallback (LOSSLESS → HIGH) is handled inside
+            # `download_track`, which only retries with HIGH on hosts
+            # where the LOSSLESS failure was quality-specific, not
+            # auth/network — so dead-TIDAL outages don't double-rotate.
+            temp_path = self.output_dir / f".tmp_tidal_{tidal_id}"
+            ok = client.download_track(
+                tidal_id, temp_path, quality="LOSSLESS", fallback_qualities=("HIGH",)
+            )
+            if not ok:
+                print("❌ TIDAL download failed", file=sys.stderr)
                 print()
-                return True
+                return False
 
-            print("❌ TIDAL download failed", file=sys.stderr)
+            # Probe what we actually got. ffprobe sniffs magic bytes and
+            # ignores the extension, so a misnamed AAC blob still reports
+            # codec=aac. The audio quality the call asked for is not a
+            # reliable signal of what arrived; the bytes are.
+            probed = tm_audio.probe_audio(temp_path)
+            original_format = probed.get("codec")
+            original_bitrate = probed.get("bitrate_kbps")
+
+            doc = self._build_tidal_doc(
+                track,
+                spotify_metadata,
+                track_url=url,
+                playlist_url=playlist_url,
+                original_format=original_format,
+                original_bitrate=original_bitrate,
+            )
+            final_path = self._finalize_download(temp_path, doc, target_format)
+            if final_path is None:
+                print("❌ TIDAL post-processing failed", file=sys.stderr)
+                return False
+
+            print(
+                f"✅ Downloaded TIDAL ({original_format or 'unknown'}"
+                f"{f' {original_bitrate}k' if original_bitrate else ''})"
+                f" → {final_path.suffix.upper()[1:]}: {final_path}"
+            )
             print()
-            return False
+            return True
 
         except Exception as e:
             print(f"⚠️ TIDAL error: {e}", file=sys.stderr)
@@ -430,6 +488,92 @@ class Downloader:
         doc["provenance"]["track_url"] = track_url
         doc["provenance"]["playlist_url"] = playlist_url
         doc["provenance"]["source"] = "tidal-public"
+        doc["provenance"]["original_format"] = original_format
+        doc["provenance"]["original_bitrate"] = original_bitrate
+        doc["provenance"]["downloaded_at"] = datetime.now(timezone.utc).isoformat()
+        doc["provenance"]["tool_version"] = __version__
+
+        return doc
+
+    def _build_qobuz_doc(
+        self,
+        track: dict,
+        isrc: str,
+        spotify_metadata: Optional[dict],
+        *,
+        track_url: str,
+        playlist_url: Optional[str],
+        original_format: Optional[str],
+        original_bitrate: Optional[int],
+    ) -> dict:
+        """Construct the canonical metadata document for a Qobuz download.
+
+        Qobuz returns a rich track payload with nested `performer`,
+        `album`, `audio_info`, etc. Spotify metadata still wins for the
+        display name (artist/title/album) when present.
+        """
+        doc = tm_blob.empty_document()
+
+        # Display fields (Spotify wins when present; Qobuz fills the gaps).
+        if spotify_metadata:
+            artists = list(spotify_metadata.get("artists") or [])
+            if artists:
+                doc["track"]["artists"] = artists
+                doc["track"]["artist_string"] = ", ".join(artists)
+            doc["track"]["title"] = (
+                spotify_metadata.get("title") or track.get("title")
+            )
+            doc["track"]["album"] = (
+                spotify_metadata.get("album")
+                or (track.get("album") or {}).get("title")
+            )
+        if not doc["track"]["title"]:
+            doc["track"]["title"] = track.get("title")
+        if not doc["track"]["artists"]:
+            performer = (track.get("performer") or {}).get("name")
+            if performer:
+                doc["track"]["artists"] = [performer]
+                doc["track"]["artist_string"] = performer
+        if not doc["track"]["album"]:
+            doc["track"]["album"] = (track.get("album") or {}).get("title")
+
+        album = track.get("album") or {}
+        # Qobuz date is a Unix timestamp at UTC midnight.
+        released_at = album.get("released_at")
+        if released_at:
+            try:
+                doc["track"]["date"] = datetime.fromtimestamp(
+                    released_at, tz=timezone.utc
+                ).date().isoformat()
+            except (OSError, ValueError, OverflowError):
+                pass
+        doc["track"]["isrc"] = isrc
+        if (album.get("label") or {}).get("name"):
+            doc["track"]["label"] = album["label"]["name"]
+        if track.get("track_number") is not None:
+            doc["track"]["track_number"] = track["track_number"]
+        if track.get("media_number") is not None:
+            doc["track"]["disc_number"] = track["media_number"]
+        if track.get("duration") is not None:
+            try:
+                doc["track"]["duration_seconds"] = float(track["duration"])
+            except (TypeError, ValueError):
+                pass
+
+        if track.get("id") is not None:
+            doc["identifiers"]["qobuz_id"] = str(track["id"])
+        if album.get("upc"):
+            doc["identifiers"]["barcode"] = album["upc"]
+
+        cover = (album.get("image") or {}).get("large") or (
+            album.get("image") or {}
+        ).get("thumbnail")
+        if cover:
+            doc["cover_art"]["url"] = cover
+
+        doc["provenance"]["track_url"] = track_url
+        doc["provenance"]["playlist_url"] = playlist_url
+        doc["provenance"]["source"] = "qobuz-public"
         doc["provenance"]["original_format"] = original_format
         doc["provenance"]["original_bitrate"] = original_bitrate
         doc["provenance"]["downloaded_at"] = datetime.now(timezone.utc).isoformat()
@@ -596,8 +740,22 @@ class Downloader:
         if source_type == "direct":
             return False
 
-        # When ISRC is provided it is checked against the local cache first so
-        # that song.link is only called once per track across all invocations.
+        # Smart-download chain (lossless first):
+        #   1) Qobuz public proxy — true 16/44.1 FLAC, requires ISRC. Fast
+        #      and reliable as long as kennyy.com.br is up. Skips itself
+        #      when ISRC is missing.
+        #   2) TIDAL public hifi-api — historically AAC 320 (silent
+        #      downgrade from "LOSSLESS"); currently mostly 401/403 due
+        #      to upstream OAuth issues. Kept as a safety net.
+        # Falls through to YouTube/spotdl in the caller when both fail.
+        if self._try_qobuz_public(
+            url,
+            target_format,
+            spotify_metadata,
+            playlist_url=playlist_url,
+            isrc=isrc,
+        ):
+            return True
         return self._try_tidal_public(
             url,
             target_format,

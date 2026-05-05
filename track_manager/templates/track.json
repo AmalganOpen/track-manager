@@ -18,6 +18,7 @@
         "barcode": null,
         "spotify_id": null,
         "tidal_id": null,
+        "qobuz_id": null,
         "musicbrainz_id": null
     },
     "cover_art": {

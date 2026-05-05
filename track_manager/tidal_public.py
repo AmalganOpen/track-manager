@@ -455,54 +455,83 @@ class TidalPublicClient:
         return True
 
     def download_track(
-        self, track_id: str, output_path: Path, quality: str = "LOSSLESS"
+        self,
+        track_id: str,
+        output_path: Path,
+        quality: str = "LOSSLESS",
+        fallback_qualities: tuple = (),
     ) -> bool:
         """Download track via the streaming pool, rotating through every host.
 
-        Rotation policy:
-        - Success on any endpoint → pin it to `self.streaming_endpoint` and
-          return True.
-        - HTTP 400 → stop early; the request is malformed, same on every host.
-        - Everything else (timeouts, 401/403/404/429/5xx, MPD-only manifest,
-          missing/garbled manifest, JSON parse errors) → try the next endpoint.
-        Streaming hosts differ per-track because the upstream TIDAL session,
-        region, and tier-availability vary by host, so we keep going until
-        one works or the list is exhausted.
+        For each endpoint, try `quality` first, then each item in
+        `fallback_qualities` in order — but only on hosts where the
+        previous attempt failed in a way that *another quality might fix*.
+
+        Per-endpoint quality fallback policy:
+        - Success → pin endpoint, return True.
+        - HTTP 400 → stop completely; request itself is malformed.
+        - HTTP 401/403/5xx → endpoint is broken (auth revoked, upstream
+          gone, or Cloudflare wrapping an origin auth failure as 520/525/
+          530). Every quality will fail identically; skip remaining
+          qualities, move to next host.
+        - Connection error / timeout → endpoint unreachable; same as above.
+        - HTTP 404/429 / no manifest / MPD-only / parse error → this
+          *quality* didn't work, but another might on the same host.
+          Try next quality on the same endpoint.
+
+        Streaming hosts differ per-track because the upstream TIDAL
+        session, region, and tier-availability vary by host, so we keep
+        rotating until one works or the list is exhausted.
 
         Args:
             track_id: TIDAL track ID
             output_path: Output file path
-            quality: Quality tier (LOSSLESS or HIGH)
+            quality: Primary quality tier (LOSSLESS or HIGH).
+            fallback_qualities: Other tiers to try on the same endpoint
+                                if `quality` fails with a quality-specific
+                                error (not auth/network). e.g. `("HIGH",)`
+                                falls back to AAC when LOSSLESS isn't
+                                available on a particular host.
 
         Returns:
-            True if successful
+            True if successful at any quality on any endpoint.
         """
-        endpoints = self._rotation_order(self.streaming_endpoints, self.streaming_endpoint)
+        qualities = (quality, *fallback_qualities)
+        endpoints = self._rotation_order(
+            self.streaming_endpoints, self.streaming_endpoint
+        )
 
         for endpoint in endpoints:
             if endpoint != self.streaming_endpoint:
                 print(f"ℹ️ Trying alternate TIDAL streaming endpoint: {endpoint}", file=sys.stderr)
-            try:
-                if self._download_track_from_endpoint(endpoint, track_id, output_path, quality):
-                    self.streaming_endpoint = endpoint
-                    return True
-                # Inner returned False (no manifest, MPD-only, missing URL, …).
-                # Another endpoint may serve a different manifest type — try next.
-                continue
-            except requests.HTTPError as e:
-                status = e.response.status_code if e.response is not None else None
-                print(f"❌ TIDAL download failed on {endpoint}: {e}", file=sys.stderr)
-                if status == 400:
-                    return False  # malformed request — won't change on a different endpoint
-                continue  # 401/403/404/429/5xx → try next
-            except requests.RequestException as e:
-                # Connection-level failure (SSL error, timeout, DNS) — try next
-                print(f"❌ TIDAL download failed on {endpoint}: {e}", file=sys.stderr)
-                continue
-            except (ValueError, KeyError) as e:
-                # Unparseable response — could be transient, try next
-                print(f"❌ TIDAL download parsing failed on {endpoint}: {e}", file=sys.stderr)
-                continue
+            for q in qualities:
+                try:
+                    if self._download_track_from_endpoint(endpoint, track_id, output_path, q):
+                        self.streaming_endpoint = endpoint
+                        return True
+                    # Inner returned False (no manifest, MPD-only, missing URL).
+                    # This quality has no usable stream on this host, but
+                    # another quality might — keep trying on this endpoint.
+                    continue
+                except requests.HTTPError as e:
+                    status = e.response.status_code if e.response is not None else None
+                    print(f"❌ TIDAL download failed on {endpoint} ({q}): {e}", file=sys.stderr)
+                    if status == 400:
+                        return False  # malformed request — won't change anywhere
+                    if status in (401, 403) or (status is not None and status >= 500):
+                        # Endpoint is broken for everything (auth revoked,
+                        # upstream gone, or Cloudflare-wrapped origin auth
+                        # failure as 520/525/530). Every quality fails the
+                        # same; skip remaining qualities.
+                        break
+                    continue  # 404/429 — track/rate-limit specific, try next quality
+                except requests.RequestException as e:
+                    # Connection-level (SSL/timeout/DNS) — endpoint dead.
+                    print(f"❌ TIDAL download failed on {endpoint} ({q}): {e}", file=sys.stderr)
+                    break
+                except (ValueError, KeyError) as e:
+                    print(f"❌ TIDAL download parsing failed on {endpoint} ({q}): {e}", file=sys.stderr)
+                    continue
 
         print(f"❌ TIDAL download: all {len(endpoints)} streaming endpoints exhausted", file=sys.stderr)
         return False
