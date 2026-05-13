@@ -80,6 +80,16 @@ class SoundCloudDownloader(YouTubeDownloader):
 
         with yt_dlp.YoutubeDL(_sc_ydl_opts(self.output_dir)) as ydl:
             try:
+                # Cheap metadata-only fetch first so we can pre-empt
+                # downloading audio for tracks already in the library.
+                # Flat playlist extraction often gives title='Unknown',
+                # so we re-extract per-track here to get real tags.
+                meta = ydl.extract_info(url, download=False)
+                pre_artist = meta.get("artist") or meta.get("uploader")
+                pre_title = meta.get("track") or meta.get("title")
+                if self.check_duplicate_for(pre_artist, pre_title):
+                    return True
+
                 info = ydl.extract_info(url, download=True)
                 return self._process_download(info, target_format, playlist_url)
             except Exception as e:

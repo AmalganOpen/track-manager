@@ -197,12 +197,20 @@ class BaseDownloader(ABC):
             Tuple of (artist, title)
         """
         try:
+            # Easy mode does not apply to AIFF — mutagen returns raw ID3
+            # frame keys (TIT2 / TPE1) for AIFF files. Fall back to those
+            # so the dedup logic sees AIFF tags too.
             audio = MutagenFile(str(file_path), easy=True)
             if not audio:
                 return None, None
 
             artist = audio.get("artist", [None])[0] if "artist" in audio else None
             title = audio.get("title", [None])[0] if "title" in audio else None
+
+            if not artist and "TPE1" in audio:
+                artist = str(audio["TPE1"]) or None
+            if not title and "TIT2" in audio:
+                title = str(audio["TIT2"]) or None
 
             return artist, title
         except Exception as e:

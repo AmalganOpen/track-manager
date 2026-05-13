@@ -7,6 +7,20 @@ from typing import List, Optional, Tuple
 from mutagen import File as MutagenFile
 from mutagen.mp4 import MP4
 
+# All audio formats we recognise when scanning the library for duplicates.
+# AIFF is included because it's the default download format; MP4-style
+# freeform atoms (TRACK_URL, ISRC) only exist on .m4a, but ID3 frames
+# (TSRC) exist on .mp3 and .aiff alike.
+_AUDIO_GLOBS = (
+    "*.m4a", "*.M4A",
+    "*.mp3", "*.MP3",
+    "*.aiff", "*.AIFF", "*.aif", "*.AIF",
+    "*.flac", "*.FLAC",
+    "*.wav", "*.WAV",
+)
+_M4A_GLOBS = ("*.m4a", "*.M4A")
+_ID3_GLOBS = ("*.mp3", "*.MP3", "*.aiff", "*.AIFF", "*.aif", "*.AIF")
+
 
 def normalize_text(text: str) -> str:
     """Normalize text for comparison.
@@ -108,12 +122,26 @@ def extract_metadata(file_path: Path) -> Tuple[Optional[str], Optional[str]]:
         Tuple of (artist, title)
     """
     try:
+        # Easy mode covers MP3 / M4A / FLAC nicely, but mutagen does not
+        # apply the easy-tag mapping to AIFF — for AIFF files the returned
+        # object exposes raw ID3 frame keys (TIT2, TPE1) instead of
+        # 'title'/'artist'. Try easy first, then fall back to raw frames.
         audio = MutagenFile(str(file_path), easy=True)
         if not audio:
             return None, None
 
         artist = audio.get("artist", [None])[0] if "artist" in audio else None
         title = audio.get("title", [None])[0] if "title" in audio else None
+
+        if artist and title:
+            return artist, title
+
+        # Fall back to raw ID3 frames (AIFF, and any MP3 whose easy
+        # adapter didn't pick up a non-standard frame).
+        if "TPE1" in audio and not artist:
+            artist = str(audio["TPE1"]) or None
+        if "TIT2" in audio and not title:
+            title = str(audio["TIT2"]) or None
 
         return artist, title
     except Exception:
@@ -151,23 +179,35 @@ def find_duplicates_by_track_url(track_url: str, library_dir: Path) -> List[Path
     # Normalize URL for comparison (remove trailing slashes, query params)
     normalized_url = track_url.rstrip('/').split('?')[0].lower()
 
-    # Scan for M4A files
-    for pattern in ["*.m4a", "*.M4A"]:
+    # M4A files store track URL as a freeform iTunes atom.
+    for pattern in _M4A_GLOBS:
         for file_path in library_dir.glob(pattern):
             try:
                 audio = MP4(str(file_path))
                 if not audio:
                     continue
-
-                # M4A files store track URL in provenance
                 url_tags = audio.get("----:com.apple.iTunes:TRACK_URL")
                 if url_tags:
                     file_url = url_tags[0].decode("utf-8")
-                    # Normalize for comparison
                     file_url_normalized = file_url.rstrip('/').split('?')[0].lower()
                     if file_url_normalized == normalized_url:
                         duplicates.append(file_path)
+            except Exception:
+                continue
 
+    # MP3 / AIFF store provenance as ID3 TXXX frames.
+    for pattern in _ID3_GLOBS:
+        for file_path in library_dir.glob(pattern):
+            try:
+                from mutagen.id3 import ID3
+                audio = ID3(str(file_path))
+                for frame in audio.getall("TXXX"):
+                    if frame.desc == "TRACK_URL" and frame.text:
+                        file_url = str(frame.text[0])
+                        file_url_normalized = file_url.rstrip('/').split('?')[0].lower()
+                        if file_url_normalized == normalized_url:
+                            duplicates.append(file_path)
+                            break
             except Exception:
                 continue
 
@@ -189,39 +229,33 @@ def find_duplicates_by_isrc(isrc: str, library_dir: Path) -> List[Path]:
 
     duplicates = []
 
-    # Scan for M4A files
-    for pattern in ["*.m4a", "*.M4A"]:
+    # M4A files store ISRC in ----:com.apple.iTunes:ISRC
+    for pattern in _M4A_GLOBS:
         for file_path in library_dir.glob(pattern):
             try:
                 audio = MP4(str(file_path))
                 if not audio:
                     continue
-
-                # M4A files store ISRC in ----:com.apple.iTunes:ISRC
                 isrc_tags = audio.get("----:com.apple.iTunes:ISRC")
                 if isrc_tags:
                     file_isrc = isrc_tags[0].decode("utf-8")
                     if file_isrc.upper() == isrc.upper():
                         duplicates.append(file_path)
-
             except Exception:
                 continue
 
-    # Scan for MP3 files
-    for pattern in ["*.mp3", "*.MP3"]:
+    # MP3 / AIFF store ISRC in the ID3 TSRC frame.
+    for pattern in _ID3_GLOBS:
         for file_path in library_dir.glob(pattern):
             try:
                 from mutagen.id3 import ID3
                 audio = ID3(str(file_path))
                 if not audio:
                     continue
-
-                # MP3 files store ISRC in TSRC frame
                 if "TSRC" in audio:
                     file_isrc = str(audio["TSRC"])
                     if file_isrc.upper() == isrc.upper():
                         duplicates.append(file_path)
-
             except Exception:
                 continue
 
@@ -248,8 +282,7 @@ def find_duplicates(artist: str, title: str, library_dir: Path) -> List[Path]:
 
     duplicates = []
 
-    # Scan for audio files
-    for pattern in ["*.m4a", "*.M4A", "*.mp3", "*.MP3"]:
+    for pattern in _AUDIO_GLOBS:
         for file_path in library_dir.glob(pattern):
             existing_artist, existing_title = extract_metadata(file_path)
             norm_existing = normalize_metadata(existing_artist, existing_title)
@@ -339,8 +372,7 @@ def scan_library(library_dir: Path) -> dict:
 
     tracks = {}  # normalized -> [paths]
 
-    # Scan for audio files
-    for pattern in ["*.m4a", "*.M4A", "*.mp3", "*.MP3"]:
+    for pattern in _AUDIO_GLOBS:
         for file_path in library_dir.glob(pattern):
             artist, title = extract_metadata(file_path)
             if artist and title:
