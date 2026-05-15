@@ -164,10 +164,15 @@ class TidalPublicClient:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "track-manager/0.2.0"})
 
-        print(
-            f"ℹ️ TIDAL endpoints loaded from {source}: "
-            f"{len(self.api_endpoints)} api, {len(self.streaming_endpoints)} streaming"
-        )
+        # Only announce endpoint loading when something noteworthy happened:
+        # a fresh fetch from monochrome.tf or a fallback to hardcoded list.
+        # The cache-hit case is the steady state and would just be noise on
+        # every run.
+        if source != "cache":
+            print(
+                f"ℹ️ TIDAL endpoints loaded from {source}: "
+                f"{len(self.api_endpoints)} api, {len(self.streaming_endpoints)} streaming"
+            )
         if bypass_cache:
             print("ℹ️ TIDAL ID cache disabled (--no-cache)")
         self._isrc_cache: Optional[dict] = None

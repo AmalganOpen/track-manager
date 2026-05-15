@@ -23,6 +23,7 @@ from .. import __version__
 from .. import audio as tm_audio
 from .. import blob as tm_blob
 from .. import pipeline as tm_pipeline
+from ..config import Config
 from .base import BaseDownloader
 
 URLType = Literal["video", "playlist", "video_in_playlist"]
@@ -50,6 +51,39 @@ def parse_youtube_url(url: str) -> tuple[URLType, Optional[str], Optional[str]]:
     return "video", None, None
 
 
+def _auth_opts() -> Dict[str, Any]:
+    """yt-dlp auth options sourced from config for age-restricted videos.
+
+    Returns either {"cookiefile": ...} or {"cookiesfrombrowser": (...,)},
+    or {} if neither is configured. `cookiefile` takes precedence.
+    """
+    cfg = Config()
+    opts: Dict[str, Any] = {}
+    cookies_file = cfg.youtube_cookies_file
+    if cookies_file:
+        opts["cookiefile"] = cookies_file
+    else:
+        browser = cfg.youtube_cookies_from_browser
+        if browser:
+            # yt-dlp expects a tuple: (browser_name, profile, keyring, container)
+            opts["cookiesfrombrowser"] = (browser,)
+
+    # Per-extractor escape hatches for when YouTube's default clients are
+    # blocked by JS challenges or PO token requirements.
+    extractor_args: Dict[str, list[str]] = {}
+    clients = cfg.youtube_player_clients
+    if clients:
+        extractor_args.setdefault("youtube", []).append(
+            "player_client=" + ",".join(clients)
+        )
+    po_token = cfg.youtube_po_token
+    if po_token:
+        extractor_args.setdefault("youtube", []).append(f"po_token={po_token}")
+    if extractor_args:
+        opts["extractor_args"] = extractor_args
+    return opts
+
+
 def _ydl_opts(output_dir: Path) -> Dict[str, Any]:
     """yt-dlp options used for every single-track download.
 
@@ -58,7 +92,7 @@ def _ydl_opts(output_dir: Path) -> Dict[str, Any]:
     via fmt 140) and a thumbnail file alongside; encoding and embedding are
     handled downstream by `tm_audio` / `tm_blob`.
     """
-    return {
+    opts: Dict[str, Any] = {
         # 251 = Opus ~160 kbps @ 48 kHz; 140 = AAC ~128 kbps @ 44.1 kHz.
         "format": "251/140/bestaudio/best",
         "writethumbnail": True,
@@ -68,6 +102,8 @@ def _ydl_opts(output_dir: Path) -> Dict[str, Any]:
         "extract_flat": False,
         "remote_components": ["ejs:github"],
     }
+    opts.update(_auth_opts())
+    return opts
 
 
 class YouTubeDownloader(BaseDownloader):
@@ -114,6 +150,7 @@ class YouTubeDownloader(BaseDownloader):
                 "quiet": True,
                 "no_warnings": True,
                 "extract_flat": "in_playlist",
+                **_auth_opts(),
             }) as ydl:
                 try:
                     info = ydl.extract_info(url, download=False)
@@ -341,16 +378,31 @@ class YouTubeDownloader(BaseDownloader):
                 print(f"⚠️ Error processing download: {e}", file=sys.stderr)
                 return False
 
+    # Image extensions so we can exclude thumbnails from the audio search.
+    _THUMBNAIL_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif"})
+
     def _find_temp_audio(self, video_id: Optional[str]) -> Optional[Path]:
-        """Locate the audio file yt-dlp wrote for `video_id`."""
+        """Locate the audio file yt-dlp wrote for `video_id`.
+
+        Globs `.tmp_<id>.*` rather than hard-coding extensions: SoundCloud's
+        authenticated `download` format can yield any container the uploader
+        used (wav, aiff, flac, m4a, mp3, …) and we don't want to maintain
+        that list by hand. Thumbnail files (yt-dlp writes one per track)
+        are filtered out by extension.
+        """
         if not video_id:
             return None
-        # Order matters: we prefer the formats yt-dlp picks first.
-        for ext in ("webm", "m4a", "opus", "ogg", "mp3", "aac", "wav"):
-            p = self.output_dir / f".tmp_{video_id}.{ext}"
-            if p.exists():
-                return p
-        return None
+        candidates = [
+            p
+            for p in self.output_dir.glob(f".tmp_{video_id}.*")
+            if p.suffix.lower() not in self._THUMBNAIL_EXTS and p.is_file()
+        ]
+        if not candidates:
+            return None
+        # Prefer the largest file when there's somehow more than one, e.g.
+        # if a previous run left a partial alongside a successful download.
+        candidates.sort(key=lambda p: p.stat().st_size, reverse=True)
+        return candidates[0]
 
     def _read_temp_thumbnail(self, video_id: Optional[str]) -> Optional[bytes]:
         """Locate and read the thumbnail file written by yt-dlp."""

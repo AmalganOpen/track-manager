@@ -18,6 +18,49 @@ spotdl:
   client_id: ""
   client_secret: ""
 
+# SoundCloud configuration (OPTIONAL)
+# Public SoundCloud tracks download as ~128 kbps MP3 (HLS). When the
+# uploader enabled "Download file" on a track, an authenticated session
+# unlocks the original upload (often WAV/AIFF/FLAC). Provide an OAuth
+# token to enable this.
+#
+# How to get an OAuth token:
+#   1. Log in to https://soundcloud.com in your browser.
+#   2. Open DevTools → Application → Cookies → https://soundcloud.com
+#   3. Copy the value of the `oauth_token` cookie (looks like "2-12345-...").
+#
+# The token is long-lived (~1 year) and only invalidated by logging out
+# or changing your password.
+soundcloud:
+  oauth_token: ""
+
+# YouTube configuration (OPTIONAL)
+# Age-restricted videos require authentication. Provide either a path to a
+# cookies.txt file (Netscape format), or the name of a browser to import
+# cookies from (e.g. "chrome", "firefox", "safari", "brave", "edge").
+#
+# Export cookies.txt with an extension like "Get cookies.txt LOCALLY" while
+# logged in to youtube.com, or just point `cookies_from_browser` at the
+# browser you're already signed in to.
+#
+# See: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
+youtube:
+  # Path to a Netscape-format cookies.txt file
+  cookies_file: ""
+  # Browser to import cookies from (chrome, firefox, safari, brave, edge, ...)
+  cookies_from_browser: ""
+
+  # Override yt-dlp's YouTube player clients. Leave empty for defaults.
+  # Useful when the default clients fail with JS challenges ("found 0 n
+  # function possibilities") or demand a GVS PO token. Clients that often
+  # work with cookies and no JS solving: mweb, tv_embedded, android_vr.
+  # Example: "mweb,tv_embedded"
+  player_clients: ""
+
+  # Optional GVS PO token in yt-dlp's "<client>.gvs+<token>" format.
+  # See: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
+  po_token: ""
+
 # DAB Music (LEGACY - currently unused)
 # Note: DAB Music service is currently unavailable
 # High-quality FLAC downloads now use public TIDAL API (no credentials required)

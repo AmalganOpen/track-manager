@@ -11,12 +11,21 @@ from typing import Optional
 import yt_dlp
 
 from .. import audio as tm_audio
+from ..config import Config
 from .youtube import YouTubeDownloader
 
 
 def _sc_ydl_opts(output_dir) -> dict:
-    """yt-dlp options for a single SoundCloud track download."""
-    return {
+    """yt-dlp options for a single SoundCloud track download.
+
+    When `soundcloud.oauth_token` is configured, yt-dlp authenticates
+    against SoundCloud and gains access to the original uploader-provided
+    download (often WAV/AIFF/FLAC) on tracks where the uploader enabled
+    "Download file". `bestaudio/best` then naturally picks that
+    highest-quality format. Without auth, only the public HLS streams
+    (~128 kbps MP3) are available.
+    """
+    opts: dict = {
         "format": "bestaudio/best",
         "writethumbnail": True,
         "outtmpl": str(output_dir / ".tmp_%(id)s.%(ext)s"),
@@ -25,6 +34,16 @@ def _sc_ydl_opts(output_dir) -> dict:
         "extract_flat": False,
         "remote_components": ["ejs:github"],
     }
+
+    oauth_token = Config().get("soundcloud.oauth_token")
+    if oauth_token:
+        # yt-dlp's SoundCloud extractor accepts an OAuth token via the
+        # special username "oauth" (equivalent to `--username oauth
+        # --password <token>` on the CLI).
+        opts["username"] = "oauth"
+        opts["password"] = oauth_token
+
+    return opts
 
 
 class SoundCloudDownloader(YouTubeDownloader):

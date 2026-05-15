@@ -220,15 +220,12 @@ class Downloader:
                 self._qobuz_client = QobuzPublicClient(bypass_cache=self.bypass_cache)
             client = self._qobuz_client
 
-            print("🎵 Looking up track on Qobuz (by ISRC)...")
+            print(f"🎵 Searching Qobuz (ISRC: {isrc})...")
             temp_path = self.output_dir / f".tmp_qobuz_{isrc}"
             track = client.download_by_isrc(isrc, temp_path)
             if not track:
                 print("ℹ️ Track not available via Qobuz")
                 return False
-
-            performer = (track.get("performer") or {}).get("name") or "?"
-            print(f"✅ Got from Qobuz: {track.get('title')!r} by {performer}")
 
             # Probe the bytes — Qobuz consistently returns FLAC, but verify.
             probed = tm_audio.probe_audio(temp_path)
@@ -335,6 +332,7 @@ class Downloader:
         spotify_metadata: Optional[dict] = None,
         playlist_url: Optional[str] = None,
         isrc: Optional[str] = None,
+        prefetched_track: Optional[dict] = None,
     ) -> bool:
         """Try to download from the public TIDAL API.
 
@@ -342,6 +340,10 @@ class Downloader:
           LOSSLESS → FLAC; encoded to `target_format`.
           HIGH     → AAC 320k in MP4; passthrough rename when target=='m4a'
                      else encoded to `target_format`.
+
+        If `prefetched_track` is supplied (e.g. from
+        `_resolve_isrc_via_tidal`), the lookup phase is skipped and we go
+        straight to the streaming download.
         """
         from .tidal_public import TidalPublicClient
 
@@ -350,18 +352,22 @@ class Downloader:
                 self._tidal_client = TidalPublicClient(bypass_cache=self.bypass_cache)
             client = self._tidal_client
 
-            print("🎵 Looking up track on TIDAL...")
-            tidal_id = client.get_tidal_id_from_url(url, isrc=isrc)
-            if not tidal_id:
-                print("ℹ️ Track not found on TIDAL")
-                return False
+            if prefetched_track is not None:
+                track = prefetched_track
+                tidal_id = str(track.get("id"))
+            else:
+                print("🎵 Looking up track on TIDAL...")
+                tidal_id = client.get_tidal_id_from_url(url, isrc=isrc)
+                if not tidal_id:
+                    print("ℹ️ Track not found on TIDAL")
+                    return False
 
-            track = client.get_track_info(tidal_id)
-            if not track:
-                print("ℹ️ Could not get track info from TIDAL")
-                return False
+                track = client.get_track_info(tidal_id)
+                if not track:
+                    print("ℹ️ Could not get track info from TIDAL")
+                    return False
 
-            print(f"✅ Found on TIDAL: {track['title']} by {track['artist']['name']}")
+                print(f"✅ Found on TIDAL: {track['title']} by {track['artist']['name']}")
 
             # The TIDAL public endpoint historically promised FLAC for
             # quality=LOSSLESS, but at present it tends to serve AAC HIGH
@@ -715,7 +721,7 @@ class Downloader:
         spotify_metadata: Optional[dict] = None,
         playlist_url: Optional[str] = None,
     ) -> bool:
-        """Try to download via the smart-download chain (TIDAL public API).
+        """Try to download via the smart-download chain (Qobuz → TIDAL).
 
         Args:
             url: Track URL (for ISRC lookup if needed)
@@ -740,14 +746,23 @@ class Downloader:
         if source_type == "direct":
             return False
 
+        # Resolve once: if we don't already know the ISRC (typical for
+        # SoundCloud/YouTube URLs), look it up via TIDAL — song.link gives us
+        # a TIDAL track id from the URL, and TIDAL's /info/ endpoint gives us
+        # the ISRC. The api pool is much more reliable than the streaming
+        # pool, so this works even when TIDAL streaming hosts are all 502.
+        # Both branches below reuse the prefetched track_info to avoid a
+        # second round-trip.
+        tidal_track = None
+        if not isrc:
+            isrc, tidal_track = self._resolve_isrc_via_tidal(url)
+
         # Smart-download chain (lossless first):
-        #   1) Qobuz public proxy — true 16/44.1 FLAC, requires ISRC. Fast
-        #      and reliable as long as kennyy.com.br is up. Skips itself
-        #      when ISRC is missing.
-        #   2) TIDAL public hifi-api — historically AAC 320 (silent
-        #      downgrade from "LOSSLESS"); currently mostly 401/403 due
-        #      to upstream OAuth issues. Kept as a safety net.
-        # Falls through to YouTube/spotdl in the caller when both fail.
+        #   1) Qobuz public proxy — true 16/44.1 FLAC, requires ISRC.
+        #      Fast and reliable as long as kennyy.com.br is up.
+        #   2) TIDAL public hifi-api — LOSSLESS FLAC (or HIGH AAC) via
+        #      community-hosted streaming proxies. Volatile.
+        # Falls through to YouTube/SoundCloud/spotdl in the caller when both fail.
         if self._try_qobuz_public(
             url,
             target_format,
@@ -762,7 +777,45 @@ class Downloader:
             spotify_metadata,
             playlist_url=playlist_url,
             isrc=isrc,
+            prefetched_track=tidal_track,
         )
+
+    def _resolve_isrc_via_tidal(
+        self, url: str
+    ) -> tuple[Optional[str], Optional[dict]]:
+        """Discover a track's ISRC by looking it up on TIDAL via song.link.
+
+        Returns `(isrc, track_info)`. Either may be None if the lookup
+        failed (track not on TIDAL, all api endpoints down, etc.). The
+        `track_info` is returned so callers can hand it back to
+        `_try_tidal_public` and skip the redundant fetch.
+        """
+        try:
+            from .tidal_public import TidalPublicClient
+
+            if not hasattr(self, "_tidal_client"):
+                self._tidal_client = TidalPublicClient(bypass_cache=self.bypass_cache)
+            client = self._tidal_client
+
+            print("🔍 Resolving ISRC via TIDAL...")
+            tidal_id = client.get_tidal_id_from_url(url)
+            if not tidal_id:
+                print("ℹ️ Track not found on TIDAL")
+                return None, None
+
+            track = client.get_track_info(tidal_id)
+            if not track:
+                print("ℹ️ Could not get track info from TIDAL")
+                return None, None
+
+            isrc = track.get("isrc")
+            artist = track.get("artist", {}).get("name") or "?"
+            isrc_suffix = f" (ISRC: {isrc})" if isrc else ""
+            print(f"✅ Matched on TIDAL: {track.get('title')} by {artist}{isrc_suffix}")
+            return isrc, track
+        except Exception as e:
+            print(f"⚠️ TIDAL lookup error: {e}", file=sys.stderr)
+            return None, None
 
     def download(self, url: str, format: str = "auto", show_header: bool = True):
         """Download track(s) from URL.

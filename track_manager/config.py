@@ -124,6 +124,38 @@ class Config:
         return self.get("dabmusic.endpoint", "https://dabmusic.xyz")
 
     @property
+    def youtube_cookies_file(self) -> Optional[str]:
+        """Path to Netscape-format cookies.txt for YouTube (age-restricted videos)."""
+        path = self.get("youtube.cookies_file", "")
+        return path if path else None
+
+    @property
+    def youtube_cookies_from_browser(self) -> Optional[str]:
+        """Browser name to import YouTube cookies from (chrome, firefox, ...)."""
+        name = self.get("youtube.cookies_from_browser", "")
+        return name if name else None
+
+    @property
+    def youtube_player_clients(self) -> Optional[list[str]]:
+        """Override yt-dlp YouTube player clients (e.g. ['mweb', 'tv_embedded']).
+
+        Useful when the default clients require unsolved JS challenges or
+        PO tokens. Returns None to let yt-dlp pick its defaults.
+        """
+        clients = self.get("youtube.player_clients")
+        if isinstance(clients, str):
+            clients = [c.strip() for c in clients.split(",") if c.strip()]
+        if isinstance(clients, list) and clients:
+            return [str(c) for c in clients]
+        return None
+
+    @property
+    def youtube_po_token(self) -> Optional[str]:
+        """GVS PO token in yt-dlp's "<client>.gvs+<token>" format."""
+        token = self.get("youtube.po_token", "")
+        return token if token else None
+
+    @property
     def metadata_csv(self) -> Path:
         """Get metadata review CSV path."""
         csv_path = self.get("metadata_csv", "tracks-metadata-review.csv")

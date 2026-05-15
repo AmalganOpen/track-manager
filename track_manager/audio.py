@@ -226,8 +226,10 @@ def encode_or_passthrough(target_format: str, src: Path, dst: Path) -> Path:
     Passthrough cases (lossless, byte-identical when stream copy isn't
     needed):
       - `m4a`: source is AAC or ALAC inside an MP4 container → rename.
-      - `mp3`: source codec is mp3 → rename.
-      - `aiff`: source codec is PCM (any pcm_s* variant) → rename.
+      - `mp3`: source codec is mp3 and source extension is `.mp3` → rename.
+      - `aiff`: source codec is PCM and source extension is `.aiff`/`.aif`
+        → rename. WAV (RIFF) shares PCM codec but a different container,
+        so it is re-muxed via ffmpeg even though no re-encode happens.
 
     Everything else goes through `encode_to`. The source file is removed
     on success in the encode path, and replaced by the rename in the
@@ -235,11 +237,16 @@ def encode_or_passthrough(target_format: str, src: Path, dst: Path) -> Path:
     """
     probed = probe_audio(src)
     codec = (probed.get("codec") or "").lower()
+    src_suffix = src.suffix.lower()
 
     can_passthrough = (
         (target_format == "m4a" and codec in ("aac", "alac") and is_mp4_container(src))
-        or (target_format == "mp3" and codec == "mp3")
-        or (target_format == "aiff" and codec.startswith("pcm_s"))
+        or (target_format == "mp3" and codec == "mp3" and src_suffix == ".mp3")
+        or (
+            target_format == "aiff"
+            and codec.startswith("pcm_s")
+            and src_suffix in (".aiff", ".aif")
+        )
     )
 
     if can_passthrough:
