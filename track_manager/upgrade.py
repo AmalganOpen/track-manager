@@ -358,12 +358,24 @@ def upgrade_track(
             downloader = Downloader(config, output_dir=tmp_dir)
 
         try:
-            downloader.download(track_url, format="auto", show_header=False)
+            download_result = downloader.download(track_url, format="auto", show_header=False)
         except Exception as e:
             return False, f"Download failed: {e}"
+        if download_result is False:
+            return False, "Source download failed (no file saved)"
 
         # Find what was downloaded
-        audio_exts = {".m4a", ".mp3", ".flac", ".wav", ".ogg", ".aac", ".opus"}
+        audio_exts = {
+            ".m4a",
+            ".mp3",
+            ".flac",
+            ".wav",
+            ".ogg",
+            ".aac",
+            ".opus",
+            ".aiff",
+            ".aif",
+        }
         new_files = [
             f for f in tmp_dir.iterdir() if f.suffix.lower() in audio_exts
         ]
@@ -385,7 +397,13 @@ def upgrade_track(
         # an AIFF migrated from a 128 kbps mp3 has a 1411 kbps PCM
         # container but its real source quality is still 128 kbps).
         new_probe = tm_audio.probe_audio(new_file)
+        new_doc = tm_blob.read_blob(new_file)
         new_kbps = new_probe.get("bitrate_kbps")
+        if isinstance(new_doc, dict):
+            prov = new_doc.get("provenance") or {}
+            prov_kbps = prov.get("original_bitrate")
+            if isinstance(prov_kbps, (int, float)) and prov_kbps > 0:
+                new_kbps = int(prov_kbps)
         src_kbps = original_src.get("bitrate_kbps")
         if new_kbps and src_kbps and new_kbps <= src_kbps:
             if verbose:
@@ -402,11 +420,17 @@ def upgrade_track(
         # original (so e.g. an upgraded AIFF stays AIFF instead of silently
         # downgrading the file's container to m4a/flac).
         if must_reencode:
-            staged_path = tmp_dir / f"{original_path.stem}.aiff"
-            try:
-                tm_audio.encode_to_aiff(new_file, staged_path)
-            except tm_audio.EncodeError as e:
-                return False, f"Re-encode to AIFF failed: {e}"
+            # The downloader may already have produced AIFF (e.g. smart
+            # downloads with target_format=auto). Re-encoding AIFF->AIFF can
+            # fail when ffmpeg sees identical input/output paths.
+            if new_file.suffix.lower() in {".aiff", ".aif"}:
+                staged_path = new_file
+            else:
+                staged_path = tmp_dir / f"{original_path.stem}.aiff"
+                try:
+                    tm_audio.encode_to_aiff(new_file, staged_path)
+                except tm_audio.EncodeError as e:
+                    return False, f"Re-encode to AIFF failed: {e}"
             dest_path = original_path  # AIFF stays AIFF, same path
             extension_changed = False
             shutil.move(str(staged_path), str(dest_path))
@@ -417,6 +441,7 @@ def upgrade_track(
                     original_provenance=original_provenance,
                     new_source_file=new_file,
                     new_source_probe=new_probe,
+                    new_source_doc=new_doc,
                 )
             except Exception as e:
                 # Don't fail the upgrade just because tag refresh failed —
@@ -465,6 +490,7 @@ def _refresh_aiff_metadata(
     original_provenance: dict,
     new_source_file: Path,
     new_source_probe: dict,
+    new_source_doc: Optional[dict] = None,
 ) -> None:
     """Update an upgraded AIFF's blob + player-visible tags to reflect the new source.
 
@@ -478,8 +504,22 @@ def _refresh_aiff_metadata(
     whatever cover hash the original blob recorded.
     """
     new_probe_dest = tm_audio.probe_audio(dest_path)
-    intermediate_format = new_source_probe.get("codec") or new_source_file.suffix.lstrip(".").lower()
-    intermediate_bitrate = new_source_probe.get("bitrate_kbps")
+    intermediate_format = None
+    intermediate_bitrate = None
+    if isinstance(new_source_doc, dict):
+        prov = new_source_doc.get("provenance") or {}
+        prov_fmt = prov.get("original_format")
+        if isinstance(prov_fmt, str) and prov_fmt:
+            intermediate_format = prov_fmt
+        prov_br = prov.get("original_bitrate")
+        if isinstance(prov_br, (int, float)) and prov_br > 0:
+            intermediate_bitrate = int(prov_br)
+    if not intermediate_format:
+        intermediate_format = (
+            new_source_probe.get("codec") or new_source_file.suffix.lstrip(".").lower()
+        )
+    if intermediate_bitrate is None:
+        intermediate_bitrate = new_source_probe.get("bitrate_kbps")
 
     if original_blob is not None:
         doc = tm_blob.merge_into_template(original_blob)

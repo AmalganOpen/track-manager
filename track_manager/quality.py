@@ -1,9 +1,90 @@
 """Audio quality analysis for track library."""
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from mutagen import File as MutagenFile
+
+from . import blob as tm_blob
+
+
+def _bitrate_value_to_bps(raw: Any) -> Optional[int]:
+    """Convert a bitrate value to bps.
+
+    Accepts numeric/string values in either kbps (common in track-manager
+    provenance and legacy tags) or bps. Values <= 10_000 are interpreted
+    as kbps; larger values as bps.
+    """
+    if raw is None:
+        return None
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+
+    if value <= 0:
+        return None
+
+    if value <= 10_000:
+        return int(value * 1000)
+    return int(value)
+
+
+def _extract_original_bitrate_bps(file_path: Path, audio: Any) -> Optional[int]:
+    """Read original/source bitrate from blob, with legacy tag fallback."""
+    # Primary source of truth: embedded track-manager blob.
+    try:
+        doc = tm_blob.read_blob(file_path)
+        if isinstance(doc, dict):
+            provenance = doc.get("provenance") or {}
+            original = _bitrate_value_to_bps(provenance.get("original_bitrate"))
+            if original is not None:
+                return original
+    except Exception:
+        pass
+
+    # Legacy fallback for pre-blob files.
+    if not hasattr(audio, "tags") or not audio.tags:
+        return None
+
+    tag_candidates = (
+        "ORIGINAL_BITRATE",
+        "----:com.apple.iTunes:ORIGINAL_BITRATE",
+        "TXXX:ORIGINAL_BITRATE",
+    )
+    for key in tag_candidates:
+        tag_value = audio.tags.get(key)
+        if not tag_value:
+            continue
+
+        if isinstance(tag_value, (list, tuple)):
+            tag_value = tag_value[0]
+
+        # ID3 text frame
+        if hasattr(tag_value, "text"):
+            text = getattr(tag_value, "text", None)
+            if isinstance(text, (list, tuple)):
+                text = text[0] if text else None
+            parsed = _bitrate_value_to_bps(text)
+            if parsed is not None:
+                return parsed
+
+        # MP4 freeform bytes
+        if hasattr(tag_value, "decode"):
+            try:
+                decoded = tag_value.decode("utf-8")
+            except Exception:
+                decoded = None
+            parsed = _bitrate_value_to_bps(decoded)
+            if parsed is not None:
+                return parsed
+
+        parsed = _bitrate_value_to_bps(tag_value)
+        if parsed is not None:
+            return parsed
+
+    return None
 
 
 def get_audio_info(file_path: Path) -> Optional[Dict]:
@@ -23,21 +104,8 @@ def get_audio_info(file_path: Path) -> Optional[Dict]:
         # Get encoded bitrate as fallback
         encoded_bitrate = getattr(audio.info, "bitrate", 0)
         
-        # Check for provenance metadata (true source quality)
-        original_bitrate = None
-        if hasattr(audio, "tags") and audio.tags:
-            # Check for ORIGINAL_BITRATE tag (set by track-manager)
-            original_bitrate_tag = audio.tags.get("ORIGINAL_BITRATE") or audio.tags.get("----:com.apple.iTunes:ORIGINAL_BITRATE")
-            if original_bitrate_tag:
-                try:
-                    # Convert from "129.86" kbps string to bps integer
-                    if isinstance(original_bitrate_tag, (list, tuple)):
-                        original_bitrate_tag = original_bitrate_tag[0]
-                    if hasattr(original_bitrate_tag, 'decode'):
-                        original_bitrate_tag = original_bitrate_tag.decode('utf-8')
-                    original_bitrate = int(float(str(original_bitrate_tag)) * 1000)
-                except (ValueError, AttributeError):
-                    pass
+        # Provenance bitrate is the source quality, encoded_bitrate is output quality.
+        original_bitrate = _extract_original_bitrate_bps(file_path, audio)
 
         # Use the lowest bitrate as truth (both are in bps after conversion)
         if original_bitrate and encoded_bitrate:
@@ -112,7 +180,18 @@ def analyze_library(output_dir: Path, detailed: bool = False, verbose: bool = Fa
     files_info = []
 
     # Scan audio files
-    for pattern in ["*.m4a", "*.M4A", "*.mp3", "*.MP3", "*.flac", "*.FLAC"]:
+    for pattern in [
+        "*.aiff",
+        "*.AIFF",
+        "*.aif",
+        "*.AIF",
+        "*.m4a",
+        "*.M4A",
+        "*.mp3",
+        "*.MP3",
+        "*.flac",
+        "*.FLAC",
+    ]:
         for file_path in output_dir.glob(pattern):
             info = get_audio_info(file_path)
             if info:

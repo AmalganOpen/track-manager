@@ -817,7 +817,9 @@ class Downloader:
             print(f"⚠️ TIDAL lookup error: {e}", file=sys.stderr)
             return None, None
 
-    def download(self, url: str, format: str = "auto", show_header: bool = True):
+    def download(
+        self, url: str, format: str = "auto", show_header: bool = True
+    ) -> Optional[bool]:
         """Download track(s) from URL.
 
         Args:
@@ -858,7 +860,7 @@ class Downloader:
                     print("        client_id: 'your_id'", file=sys.stderr)
                     print("        client_secret: 'your_secret'\n", file=sys.stderr)
                     self._log_failure(url, "Spotify playlist requires API credentials")
-                    return
+                    return False
                 else:
                     # Single track - download via TIDAL (song.link)
                     print("ℹ️ Spotify API not configured, downloading via TIDAL")
@@ -868,12 +870,12 @@ class Downloader:
                     # Try smart download directly (bypasses Spotify handler)
                     success = self.try_smart_download(url, format)
                     if success:
-                        return
+                        return True
                     else:
                         print("❌ Failed to download via TIDAL", file=sys.stderr)
                         print("   Spotify API credentials needed for this track", file=sys.stderr)
                         self._log_failure(url, "TIDAL download failed, Spotify API needed")
-                        return
+                        return False
             
             # If we get here, we have Spotify credentials
             handler = self._get_spotify_handler()
@@ -888,12 +890,12 @@ class Downloader:
             print()
             success = self.try_smart_download(url, format)
             if success:
-                return  # Success, we're done
+                return True  # Success, we're done
             else:
                 print("❌ Platform not recognized and not found on TIDAL", file=sys.stderr)
                 print("   Supported: Spotify, YouTube, SoundCloud, or direct audio URLs", file=sys.stderr)
                 self._log_failure(url, "Unknown platform, not available via TIDAL")
-                return  # Don't create garbage files
+                return False  # Don't create garbage files
         elif source_type == "direct":
             # Only for confirmed direct audio file URLs
             handler = direct.DirectDownloader(self.config, self.output_dir)
@@ -901,11 +903,11 @@ class Downloader:
             # Should never reach here, but handle gracefully
             print(f"❌ Unsupported source type: {source_type}", file=sys.stderr)
             self._log_failure(url, f"Unsupported source type: {source_type}")
-            return
+            return False
 
         # Download
         try:
-            handler.download(url, format)
+            return handler.download(url, format)
         except Exception as e:
             print(f"❌ Download failed: {e}", file=sys.stderr)
             # Log to failed downloads
