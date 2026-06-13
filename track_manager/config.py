@@ -30,20 +30,30 @@ class Config:
         """Reset singleton for testing."""
         cls._instance = None
 
-    def __init__(self):
-        """Load configuration from YAML file."""
+    def __init__(self, config_path: Optional[Path] = None):
+        """Load configuration from YAML file.
+
+        Args:
+            config_path: Optional explicit path to a config file. When omitted,
+                falls back to ``<repo>/config.yaml`` next to the package.
+        """
         if self._initialized:
             return
 
-        self.config_path = Path(__file__).parent.parent / "config.yaml"
+        self.config_path = config_path or Path(__file__).parent.parent / "config.yaml"
         self.config = self._load_config()
         self._initialized = True
 
     def _load_config(self) -> dict:
         """Load and parse config file."""
         if not self.config_path.exists():
-            print(f"Error: Configuration file not found: {self.config_path}", file=sys.stderr)
-            print("Copy config.example.yaml to config.yaml and customize", file=sys.stderr)
+            print(
+                f"Error: Configuration file not found: {self.config_path}",
+                file=sys.stderr,
+            )
+            print(
+                "Copy config.example.yaml to config.yaml and customize", file=sys.stderr
+            )
             sys.exit(1)
 
         with open(self.config_path) as f:
