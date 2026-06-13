@@ -452,6 +452,107 @@ ydl_opts = {
 
 **Result:** M4A ~256kbps (quality limited by source)
 
+## Duplicate Detection & In-Place Upgrade
+
+track-manager checks whether a track is already in the library so it doesn't
+download the same recording twice. *Where* in the flow this happens depends on
+the source, and the smart-download path additionally treats an already-owned
+**lossy** copy as an opportunity to upgrade rather than a plain duplicate.
+
+### When detection runs (by source)
+
+| Path | Duplicate check |
+|------|-----------------|
+| Spotify (with API credentials) | **Before** download — by URL → ISRC → artist/title |
+| Spotify (no credentials → smart download) | **Before** download — see *Smart-download dedup* below |
+| SoundCloud (yt-dlp fallback) | **Before** audio download (cheap metadata-only fetch) |
+| YouTube (yt-dlp fallback) | **Before** (metadata-only `extract_info` probe) + after-download backstop |
+| Direct URLs | **Before** (by source URL) + after-download backstop |
+| Smart download (Qobuz / TIDAL) | **Before** download — see *Smart-download dedup* below |
+
+All of these route their skip/keep decision through the single
+`duplicates.handle_duplicates()` helper, which interprets the
+`duplicates.handling` config mode (see below).
+
+The yt-dlp paths (YouTube/SoundCloud) do a cheap metadata-only
+`extract_info(download=False)` first, and direct downloads match on the source
+URL — so a re-download of an already-owned track is caught **before** any audio
+bytes are fetched. These pre-checks run even with `--dumb` (where the
+smart-download dedup is bypassed); the post-download check remains as a backstop
+for tracks whose metadata is only known after download.
+
+### Smart-download dedup (Qobuz / TIDAL)
+
+The smart-download path (`Downloader.try_smart_download`) is the
+quality-first path: its whole purpose is to fetch a *better* version (lossless
+FLAC) than the original source. So a blunt "already exists → skip" would be
+wrong — it would block legitimate quality upgrades. Instead, once the ISRC has
+been resolved (the strongest cross-source identity), it makes a
+**quality-aware** decision:
+
+1. **Find an owned copy** by strong identity only — **ISRC first, then the
+   stored `TRACK_URL`**. Artist/title is intentionally *not* used here, so an
+   in-place upgrade can never replace a *different* recording (e.g. a live or
+   remix variant) that merely shares a name.
+2. **Already own a lossless copy** (source codec `flac`/`alac`/`pcm`/`aiff`/…):
+   the smart path can't improve on it, so it's a pure duplicate — defer to the
+   configured `duplicates.handling` mode (skip / keep / interactive).
+3. **Own only a lossy copy** (e.g. 128 kbps AAC) and under the attempt cap:
+   attempt an **in-place upgrade** via the same machinery as `tm upgrade`. The
+   file is replaced at its existing path/filename so Rekordbox cue points
+   survive.
+4. **Own a lossy copy but the attempt cap is reached**: skip. Tracks that these
+   sources only ever serve in low quality (e.g. YouTube-only uploads) are not
+   retried forever.
+
+**This only runs on the smart-download path.** With `--dumb`,
+`try_smart_download` returns immediately, so the in-place upgrade never fires —
+direct/dumb downloads keep their original post-download metadata dedup only.
+
+#### Attempt cap
+
+The number of auto-upgrade attempts is capped (`_SMART_UPGRADE_MAX_ATTEMPTS`,
+currently **2**). The counter is the same per-file
+`provenance.upgrade_attempts` value used by `tm upgrade`, and it is incremented
+**before** each attempt — so a crash or a failed attempt still counts, and the
+same track can't be retried indefinitely.
+
+#### What if the upgrade is the same or lower quality?
+
+The re-download happens into a temporary directory and `upgrade_track`
+compares the new file's bitrate against the owned copy's *source* bitrate
+(`provenance.original_bitrate`, not the container bitrate). If the new download
+is **not strictly better**:
+
+- the existing file is **left untouched** (no replacement),
+- the temporary download is discarded,
+- the attempt **still counts** toward the cap (the counter was bumped up
+  front), and
+- the run prints `⏭️ Kept existing copy (New download (… kbps) is not better
+  than source (… kbps))` and reports success (handled), so no duplicate file is
+  written alongside the original.
+
+This means a lossy track that these sources can't actually improve is attempted
+at most twice and then left alone.
+
+### `duplicates.handling` config
+
+```yaml
+# config.yaml
+duplicates:
+  # interactive | skip | keep
+  handling: "interactive"
+```
+
+- **skip** — keep the existing file, don't download the new one.
+- **keep** — keep both (download proceeds, second file written).
+- **interactive** — prompt: `[s]` skip / `[k]` keep both / `[r]` replace
+  existing.
+
+For the smart-download path this mode governs the *lossless duplicate* case
+(step 2 above). The lossy in-place upgrade (step 3) is a separate, quality-driven
+action and always replaces in place when the new download is genuinely better.
+
 ## File Naming & Organization
 
 ### Filename Format
