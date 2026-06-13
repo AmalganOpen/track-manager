@@ -31,8 +31,10 @@ class TestDownloadWorkflow:
         # Use the existing mock fixture
         mock_spotify_download.return_value.download.side_effect = mock_download
 
-        # Execute download
-        downloader.download("https://open.spotify.com/track/test123", "auto")
+        # Pretend Spotify credentials are configured so the downloader uses the
+        # Spotify handler path rather than the song.link/TIDAL fallback.
+        with patch.object(Downloader, "_has_spotify_credentials", return_value=True):
+            downloader.download("https://open.spotify.com/track/test123", "auto")
 
         # Verify download was attempted
         mock_spotify_download.return_value.download.assert_called_once()
@@ -120,17 +122,20 @@ class TestDownloadWorkflow:
         """Test format selection works correctly."""
         downloader = Downloader(test_config, temp_output_dir)
 
-        # Test explicit format
-        downloader.download("https://open.spotify.com/track/123", "mp3")
-        mock_spotify_download.return_value.download.assert_called_with(
-            "https://open.spotify.com/track/123", "mp3"
-        )
+        # Pretend Spotify credentials are configured so the downloader uses the
+        # Spotify handler path rather than the song.link/TIDAL fallback.
+        with patch.object(Downloader, "_has_spotify_credentials", return_value=True):
+            # Test explicit format
+            downloader.download("https://open.spotify.com/track/123", "mp3")
+            mock_spotify_download.return_value.download.assert_called_with(
+                "https://open.spotify.com/track/123", "mp3"
+            )
 
-        # Test auto format
-        downloader.download("https://open.spotify.com/track/456", "auto")
-        mock_spotify_download.return_value.download.assert_called_with(
-            "https://open.spotify.com/track/456", "auto"
-        )
+            # Test auto format
+            downloader.download("https://open.spotify.com/track/456", "auto")
+            mock_spotify_download.return_value.download.assert_called_with(
+                "https://open.spotify.com/track/456", "auto"
+            )
 
     def test_custom_output_directory(self, test_config, tmp_path):
         """Test custom output directory is used."""

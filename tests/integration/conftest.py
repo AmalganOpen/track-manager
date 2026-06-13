@@ -2,7 +2,7 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import yaml
@@ -97,15 +97,24 @@ def create_test_audio_file():
     return _create
 
 
+def _make_spotify_mock_instance() -> MagicMock:
+    """Build a SpotifyDownloader mock with a writable spotdl.downloader.settings dict.
+
+    The real Downloader mutates ``spotdl.downloader.settings["output"]`` when
+    reusing a cached Spotify handler, so the mock must support item assignment
+    on that nested attribute.
+    """
+    instance = MagicMock()
+    instance.download = Mock(return_value=None)
+    instance.spotdl.downloader.settings = {}
+    return instance
+
+
 @pytest.fixture(autouse=True)
 def auto_mock_spotify():
     """Automatically mock SpotifyDownloader for all tests to avoid authentication."""
     with patch("track_manager.sources.spotify.SpotifyDownloader") as mock_spotify_class:
-        # Mock the entire SpotifyDownloader class to avoid authentication
-        mock_spotify_instance = Mock()
-        mock_spotify_instance.download = Mock(return_value=None)
-        mock_spotify_class.return_value = mock_spotify_instance
-
+        mock_spotify_class.return_value = _make_spotify_mock_instance()
         yield mock_spotify_class
 
 
@@ -113,11 +122,7 @@ def auto_mock_spotify():
 def mock_spotify_download():
     """Mock spotdl downloads (explicit fixture for tests that need it)."""
     with patch("track_manager.sources.spotify.SpotifyDownloader") as mock_spotify_class:
-        # Mock the entire SpotifyDownloader class to avoid authentication
-        mock_spotify_instance = Mock()
-        mock_spotify_instance.download = Mock(return_value=None)
-        mock_spotify_class.return_value = mock_spotify_instance
-
+        mock_spotify_class.return_value = _make_spotify_mock_instance()
         yield mock_spotify_class
 
 

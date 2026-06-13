@@ -27,7 +27,9 @@ class TestMetadataWorkflow:
         )
 
         # Mock get_metadata_csv_path to use test path
-        with patch('track_manager.metadata.get_metadata_csv_path', return_value=csv_path):
+        with patch(
+            "track_manager.metadata.get_metadata_csv_path", return_value=csv_path
+        ):
             # Flag for review
             flag_for_review(test_file, "Junk in title", "https://example.com")
 
@@ -52,13 +54,15 @@ class TestMetadataWorkflow:
         # Create and flag first file
         file1 = temp_output_dir / "test1.mp3"
         create_test_audio_file(file1, artist="Artist1", title="Song1", format="mp3")
-        
+
         # Create and flag second file
         file2 = temp_output_dir / "test2.mp3"
         create_test_audio_file(file2, artist="Artist2", title="Song2", format="mp3")
-        
+
         # Mock get_metadata_csv_path to use test path
-        with patch('track_manager.metadata.get_metadata_csv_path', return_value=csv_path):
+        with patch(
+            "track_manager.metadata.get_metadata_csv_path", return_value=csv_path
+        ):
             flag_for_review(file1, "Reason 1", "url1")
             flag_for_review(file2, "Reason 2", "url2")
 
@@ -109,7 +113,9 @@ class TestMetadataWorkflow:
             )
 
         # Apply corrections
-        with patch('track_manager.metadata.get_metadata_csv_path', return_value=csv_path):
+        with patch(
+            "track_manager.metadata.get_metadata_csv_path", return_value=csv_path
+        ):
             apply_metadata_csv(dry_run=False)
 
         # Verify metadata was updated
@@ -183,7 +189,9 @@ class TestMetadataWorkflow:
             )
 
         # Apply corrections
-        with patch('track_manager.metadata.get_metadata_csv_path', return_value=csv_path):
+        with patch(
+            "track_manager.metadata.get_metadata_csv_path", return_value=csv_path
+        ):
             apply_metadata_csv(dry_run=False)
 
         # Verify only first file was updated
@@ -208,10 +216,9 @@ class TestMetadataWorkflow:
             assert len(rows) == 1
             assert rows[0]["file_path"] == str(file2)
 
-    @pytest.mark.skip(reason="Dry run mode needs implementation fix")
     def test_dry_run_mode(self, temp_output_dir, create_test_audio_file, test_config):
         """Test that dry run doesn't modify files or CSV."""
-        csv_path = test_config.metadata_csv
+        csv_path = temp_output_dir.parent / "metadata-review-dryrun.csv"
 
         # Create test file
         test_file = temp_output_dir / "test.mp3"
@@ -247,7 +254,10 @@ class TestMetadataWorkflow:
             )
 
         # Apply in dry run mode
-        apply_metadata_csv(csv_path, dry_run=True)
+        with patch(
+            "track_manager.metadata.get_metadata_csv_path", return_value=csv_path
+        ):
+            apply_metadata_csv(dry_run=True)
 
         # Verify file was NOT updated
         from mutagen.mp3 import MP3
@@ -256,10 +266,12 @@ class TestMetadataWorkflow:
         assert audio.get("TPE1", [None])[0] == "Original"
 
         # Verify CSV was NOT modified
+        assert csv_path.exists()
         with open(csv_path, "r") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
             assert len(rows) == 1
+            assert rows[0]["suggested_artist"] == "Updated"
 
     def test_verify_library(self, temp_output_dir, create_test_audio_file):
         """Test metadata quality verification."""
@@ -318,7 +330,9 @@ class TestMetadataWorkflow:
             )
 
         # Apply corrections
-        with patch('track_manager.metadata.get_metadata_csv_path', return_value=csv_path):
+        with patch(
+            "track_manager.metadata.get_metadata_csv_path", return_value=csv_path
+        ):
             apply_metadata_csv(dry_run=False)
 
         # Verify CSV was removed

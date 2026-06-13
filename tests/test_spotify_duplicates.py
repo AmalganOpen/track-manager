@@ -23,7 +23,7 @@ class TestSpotifyDuplicateDetection:
         self.config.output_dir = self.output_dir
         self.config.duplicate_handling = "skip"
         self.config.playlist_threshold = 50
-        
+
         # Mock config.get to return fake credentials
         def mock_get(key, default=""):
             if key == "spotdl.client_id":
@@ -31,7 +31,7 @@ class TestSpotifyDuplicateDetection:
             elif key == "spotdl.client_secret":
                 return "fake_client_secret"
             return default
-        
+
         self.config.get = MagicMock(side_effect=mock_get)
 
     def teardown_method(self):
@@ -196,6 +196,68 @@ class TestSpotifyDuplicateDetection:
 
                     # Verify spotdl.download was called only for second song
                     mock_spotdl.download.assert_called_once_with(song2)
+
+    @patch("track_manager.sources.spotify.Spotdl")
+    def test_download_keeps_existing_when_handling_keep(self, mock_spotdl_class):
+        """Pre-download duplicate does NOT skip when handling is 'keep'."""
+        self.config.duplicate_handling = "keep"
+
+        mock_spotdl = MagicMock()
+        mock_spotdl_class.return_value = mock_spotdl
+
+        downloader = SpotifyDownloader(self.config, self.output_dir)
+
+        song = MagicMock()
+        song.artist = "Test Artist"
+        song.name = "Test Title"
+        song.url = "https://open.spotify.com/track/test"
+
+        duplicate_file = self.output_dir / "existing.mp3"
+        duplicate_file.touch()
+
+        mock_spotdl.search.return_value = [song]
+        mock_spotdl.download.return_value = (song, self.output_dir / "new.mp3")
+
+        with patch.object(downloader, "_check_existing_duplicates") as mock_check:
+            with patch.object(downloader, "_find_downloaded_file") as mock_find:
+                with patch.object(downloader, "_process_download") as mock_process:
+                    mock_check.return_value = [duplicate_file]
+                    mock_find.return_value = self.output_dir / "new.mp3"
+                    mock_process.return_value = True
+
+                    downloader.download("https://open.spotify.com/track/test")
+
+                    # 'keep' mode means the pre-download duplicate is ignored
+                    # and the track is still downloaded.
+                    mock_spotdl.download.assert_called_once_with(song)
+
+    @patch("track_manager.sources.spotify.Spotdl")
+    def test_download_interactive_skip_choice(self, mock_spotdl_class):
+        """Pre-download duplicate skips when user chooses 's' in interactive mode."""
+        self.config.duplicate_handling = "interactive"
+
+        mock_spotdl = MagicMock()
+        mock_spotdl_class.return_value = mock_spotdl
+
+        downloader = SpotifyDownloader(self.config, self.output_dir)
+
+        song = MagicMock()
+        song.artist = "Test Artist"
+        song.name = "Test Title"
+        song.url = "https://open.spotify.com/track/test"
+
+        duplicate_file = self.output_dir / "existing.mp3"
+        duplicate_file.touch()
+
+        mock_spotdl.search.return_value = [song]
+
+        with patch.object(downloader, "_check_existing_duplicates") as mock_check:
+            with patch("builtins.input", return_value="s"):
+                mock_check.return_value = [duplicate_file]
+
+                downloader.download("https://open.spotify.com/track/test")
+
+                mock_spotdl.download.assert_not_called()
 
     @patch("track_manager.sources.spotify.Spotdl")
     def test_download_handles_empty_duplicate_check(self, mock_spotdl_class):
