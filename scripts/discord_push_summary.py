@@ -21,6 +21,9 @@ FALLBACK_MODELS = (
 )
 MAX_DIFF_CHARS = 40_000
 MAX_SUMMARY_CHARS = 1000
+DISCORD_USER_AGENT = (
+    "TrackManager-GitHubActions/1.0 (+https://github.com/AmalganOpen/track-manager)"
+)
 
 
 def validate_config(*, api_key: str, webhook_url: str, model: str) -> None:
@@ -208,7 +211,10 @@ def post_to_discord(
                 }
             ]
         },
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": DISCORD_USER_AGENT,
+        },
         service="Discord",
         timeout=30,
     )
