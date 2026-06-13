@@ -3,6 +3,7 @@ name: Discord Push Summary
 on:
   push:
     branches: [main, develop]
+  workflow_dispatch:
 
 jobs:
   summarize:
@@ -19,7 +20,58 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Verify Anthropic API key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          api_key = os.environ["ANTHROPIC_API_KEY"].strip().strip('"').strip("'")
+          model = os.environ.get("ANTHROPIC_MODEL", "").strip() or "claude-sonnet-4-6"
+
+          if not api_key.startswith("sk-ant-"):
+              print(
+                  "ANTHROPIC_API_KEY does not look like an Anthropic API key "
+                  "(expected prefix sk-ant-).",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          payload = json.dumps(
+              {
+                  "model": model,
+                  "max_tokens": 16,
+                  "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
+              }
+          ).encode()
+          request = urllib.request.Request(
+              "https://api.anthropic.com/v1/messages",
+              data=payload,
+              headers={
+                  "Content-Type": "application/json",
+                  "x-api-key": api_key,
+                  "anthropic-version": "2023-06-01",
+                  "User-Agent": "track-manager-discord-notify/1.0",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  print(f"Anthropic API check passed (HTTP {response.status}, model={model})")
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              print(f"Anthropic API check failed: HTTP {exc.code}: {body}", file=sys.stderr)
+              sys.exit(1)
+          PY
+
       - name: Post LLM push summary
+        if: github.event_name == 'push'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
