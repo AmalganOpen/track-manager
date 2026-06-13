@@ -158,6 +158,75 @@ def migrate_one(src: Path, *, backup_dir: Optional[Path] = None) -> tuple[bool, 
     )
 
 
+def reencode_backup_to_library(
+    backup_path: Path, library_dir: Path
+) -> tuple[bool, str]:
+    """Re-encode a file living in ``.tm-migration-backup/`` to a library AIFF.
+
+    Repairs a half-migrated track: Rekordbox still points at
+    ``<library>/.tm-migration-backup/<stem>.<ext>`` but no
+    ``<library>/<stem>.aiff`` was produced. This creates that AIFF (same
+    PCM/44.1 kHz target as ``migrate_one``) so ``rekordbox-update-paths``
+    can relink it. The backup file is left in place — it is already the
+    safety copy.
+
+    Returns ``(success, human-readable message)``.
+    """
+    final_path = library_dir / f"{backup_path.stem}.aiff"
+    if final_path.exists():
+        return False, f"target already exists: {final_path.name}"
+
+    tmp_path = final_path.with_name(f"{final_path.stem}.tmp.aiff")
+
+    existing_doc = _read_existing_metadata(backup_path)
+    src_info = tm_audio.probe_audio(backup_path)
+    src_duration = src_info.get("duration_seconds")
+
+    try:
+        tm_audio.encode_to_aiff(backup_path, tmp_path)
+    except tm_audio.EncodeError as e:
+        _safe_unlink(tmp_path)
+        return False, f"encode failed: {e}"
+
+    new_info = tm_audio.probe_audio(tmp_path)
+    new_duration = new_info.get("duration_seconds")
+    if (
+        src_duration is not None
+        and new_duration is not None
+        and abs(src_duration - new_duration) > DURATION_TOLERANCE_SECONDS
+    ):
+        _safe_unlink(tmp_path)
+        return (
+            False,
+            f"duration drift {src_duration:.3f}s → {new_duration:.3f}s "
+            f"exceeds tolerance ({DURATION_TOLERANCE_SECONDS}s)",
+        )
+
+    doc = _build_migrated_doc(existing_doc, src_info, new_info, backup_path)
+
+    cover_data = _extract_cover_bytes(backup_path)
+    if cover_data:
+        doc["cover_art"]["sha256"] = sha256(cover_data).hexdigest()
+        doc["cover_art"]["embedded"] = True
+
+    try:
+        tm_audio.apply_basic_tags(tmp_path, doc, cover_data)
+    except Exception as e:
+        print(f"⚠️ Failed to apply player-visible tags: {e}", file=sys.stderr)
+
+    try:
+        tm_blob.write_blob(tmp_path, doc)
+    except Exception as e:
+        print(f"⚠️ Failed to write blob: {e}", file=sys.stderr)
+
+    tmp_path.rename(final_path)
+
+    return True, (
+        f"{backup_path.suffix[1:]}@{src_info.get('bitrate_kbps') or '?'}kbps → "
+        f"{final_path.name} ({_fmt_size(new_info.get('size_bytes') or 0)})"
+    )
+
+
 def _safe_unlink(path: Path) -> None:
     """Remove `path` if it exists; never raise."""
     try:
@@ -340,6 +409,7 @@ def _fill_provenance_from_id3(doc: dict, tags) -> None:
 
 def _fill_track_from_vorbis(doc: dict, audio) -> None:
     """FLAC files use Vorbis comments via dict-like access."""
+
     def first(key: str) -> Optional[str]:
         v = audio.get(key)
         return v[0] if v else None
