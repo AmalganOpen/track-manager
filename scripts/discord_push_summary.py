@@ -13,7 +13,12 @@ from typing import Any
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "claude-sonnet-4-6"
+FALLBACK_MODELS = (
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-20250514",
+)
 MAX_DIFF_CHARS = 40_000
 MAX_SUMMARY_CHARS = 1000
 
@@ -131,6 +136,30 @@ Patch (may be truncated):
 {context["diff_patch"]}
 """
 
+    models = [model, *(m for m in FALLBACK_MODELS if m != model)]
+    last_error: RuntimeError | None = None
+
+    for candidate in models:
+        try:
+            return _summarize_with_model(
+                prompt=prompt,
+                api_key=api_key,
+                model=candidate,
+            )
+        except RuntimeError as exc:
+            last_error = exc
+            message = str(exc)
+            if "HTTP 404" in message or "not_found" in message:
+                print(f"Model {candidate} unavailable, trying fallback...", flush=True)
+                continue
+            raise
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Claude summarization failed")
+
+
+def _summarize_with_model(*, prompt: str, api_key: str, model: str) -> str:
     body = post_json(
         url=ANTHROPIC_API_URL,
         payload={
@@ -142,8 +171,9 @@ Patch (may be truncated):
             "Content-Type": "application/json",
             "x-api-key": api_key,
             "anthropic-version": ANTHROPIC_VERSION,
+            "User-Agent": "track-manager-discord-notify/1.0",
         },
-        service="Anthropic",
+        service=f"Anthropic ({model})",
         timeout=120,
     )
 
