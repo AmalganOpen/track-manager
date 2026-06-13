@@ -18,6 +18,58 @@ MAX_DIFF_CHARS = 40_000
 MAX_SUMMARY_CHARS = 1000
 
 
+def validate_config(*, api_key: str, webhook_url: str, model: str) -> None:
+    if not api_key.startswith("sk-ant-"):
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY does not look valid. Create one at "
+            "https://console.anthropic.com/settings/keys (must start with sk-ant-). "
+            "Do not use a Claude.ai login token."
+        )
+    if not webhook_url.startswith("https://discord.com/api/webhooks/"):
+        raise RuntimeError(
+            "DISCORD_WEBHOOK_URL must be the full Discord webhook URL "
+            "(https://discord.com/api/webhooks/{id}/{token})."
+        )
+    if not model:
+        raise RuntimeError("ANTHROPIC_MODEL resolved to an empty value.")
+
+
+def post_json(
+    *,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    service: str,
+    timeout: int,
+) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        detail = body.strip() or exc.reason
+        raise RuntimeError(f"{service} HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"{service} request failed: {exc.reason}") from exc
+
+    if not raw:
+        return {}
+    return json.loads(raw)
+
+
+def normalize_secret(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1].strip()
+    return value
+
+
 def run_git(*args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -79,24 +131,21 @@ Patch (may be truncated):
 {context["diff_patch"]}
 """
 
-    payload = {
-        "model": model,
-        "max_tokens": 512,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    request = urllib.request.Request(
-        ANTHROPIC_API_URL,
-        data=json.dumps(payload).encode("utf-8"),
+    body = post_json(
+        url=ANTHROPIC_API_URL,
+        payload={
+            "model": model,
+            "max_tokens": 512,
+            "messages": [{"role": "user", "content": prompt}],
+        },
         headers={
             "Content-Type": "application/json",
             "x-api-key": api_key,
             "anthropic-version": ANTHROPIC_VERSION,
         },
-        method="POST",
+        service="Anthropic",
+        timeout=120,
     )
-
-    with urllib.request.urlopen(request, timeout=120) as response:
-        body = json.load(response)
 
     parts = body.get("content") or []
     text_parts = [part.get("text", "") for part in parts if part.get("type") == "text"]
@@ -116,31 +165,28 @@ def post_to_discord(
     compare_url: str,
     commit_count: int,
 ) -> None:
-    payload: dict[str, Any] = {
-        "embeds": [
-            {
-                "title": title,
-                "description": summary,
-                "url": compare_url,
-                "color": 5763719,
-                "footer": {"text": f"{commit_count} commit(s)"},
-            }
-        ]
-    }
-    request = urllib.request.Request(
-        webhook_url,
-        data=json.dumps(payload).encode("utf-8"),
+    post_json(
+        url=webhook_url,
+        payload={
+            "embeds": [
+                {
+                    "title": title,
+                    "description": summary,
+                    "url": compare_url,
+                    "color": 5763719,
+                    "footer": {"text": f"{commit_count} commit(s)"},
+                }
+            ]
+        },
         headers={"Content-Type": "application/json"},
-        method="POST",
+        service="Discord",
+        timeout=30,
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        if response.status >= 400:
-            raise RuntimeError(f"Discord webhook failed with status {response.status}")
 
 
 def main() -> int:
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    api_key = normalize_secret(os.environ.get("ANTHROPIC_API_KEY", ""))
+    webhook_url = normalize_secret(os.environ.get("DISCORD_WEBHOOK_URL", ""))
     before_sha = os.environ.get("GITHUB_BEFORE_SHA", "").strip()
     after_sha = os.environ.get("GITHUB_AFTER_SHA", "").strip()
     repo = os.environ.get("GITHUB_REPOSITORY", "unknown/repo").strip()
@@ -164,7 +210,14 @@ def main() -> int:
         return 1
 
     try:
+        validate_config(api_key=api_key, webhook_url=webhook_url, model=model)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    try:
         context = collect_push_context(before_sha, after_sha)
+        print(f"Summarizing push with {model}...", flush=True)
         summary = summarize_with_claude(
             repo=repo,
             branch=branch,
@@ -176,6 +229,7 @@ def main() -> int:
         commit_count = len(
             [line for line in context["commit_log"].splitlines() if line.strip()]
         )
+        print("Posting summary to Discord...", flush=True)
         post_to_discord(
             webhook_url=webhook_url,
             title=f"{repo.split('/')[-1]} → {branch}",
@@ -184,8 +238,8 @@ def main() -> int:
             or f"https://github.com/{repo}/commit/{after_sha}",
             commit_count=commit_count,
         )
-    except (urllib.error.HTTPError, urllib.error.URLError, subprocess.CalledProcessError) as exc:
-        print(f"Push summary failed: {exc}", file=sys.stderr)
+    except subprocess.CalledProcessError as exc:
+        print(f"Git command failed: {exc.stderr or exc}", file=sys.stderr)
         return 1
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
