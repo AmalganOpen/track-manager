@@ -71,9 +71,7 @@ class QobuzPublicClient:
         self.session = requests.Session()
         # Most community proxies front-end through Cloudflare and reject
         # non-browser User-Agents. A generic Mozilla string is enough.
-        self.session.headers.update(
-            {"User-Agent": "Mozilla/5.0 (track-manager)"}
-        )
+        self.session.headers.update({"User-Agent": "Mozilla/5.0 (track-manager)"})
         self._isrc_cache: Optional[dict] = None
 
     # ------------------------------------------------------------------
@@ -189,9 +187,7 @@ class QobuzPublicClient:
         if r is None:
             return None
         try:
-            items = (
-                r.json().get("data", {}).get("tracks", {}).get("items") or []
-            )
+            items = r.json().get("data", {}).get("tracks", {}).get("items") or []
         except (ValueError, KeyError) as e:
             print(f"⚠️ Qobuz search parse error: {e}", file=sys.stderr)
             return None
@@ -204,7 +200,9 @@ class QobuzPublicClient:
             self._save_cache()
         return track
 
-    def _get_download_url(self, track_id: int, quality: int = _QUALITY_FLAC) -> Optional[str]:
+    def _get_download_url(
+        self, track_id: int, quality: int = _QUALITY_FLAC
+    ) -> Optional[str]:
         r = self._get_with_retry(
             "/api/download-music",
             {"track_id": track_id, "quality": quality},
@@ -228,9 +226,7 @@ class QobuzPublicClient:
             )
         return url
 
-    def download_by_isrc(
-        self, isrc: str, output_path: Path
-    ) -> Optional[Dict]:
+    def download_by_isrc(self, isrc: str, output_path: Path) -> Optional[Dict]:
         """Search Qobuz by ISRC and download the first match to `output_path`.
 
         Returns the Qobuz track metadata dict on success (so the caller
@@ -256,9 +252,7 @@ class QobuzPublicClient:
             with open(output_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=65536):
                     f.write(chunk)
-            print(
-                f"   {output_path.stat().st_size:,} bytes in {time.time() - t0:.1f}s"
-            )
+            print(f"   {output_path.stat().st_size:,} bytes in {time.time() - t0:.1f}s")
             return track
         except requests.RequestException as e:
             print(f"❌ Qobuz audio fetch failed: {e}", file=sys.stderr)

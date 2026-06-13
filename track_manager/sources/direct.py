@@ -78,7 +78,9 @@ class DirectDownloader(BaseDownloader):
                             downloaded += len(chunk)
                             if total_size:
                                 progress = (downloaded / total_size) * 100
-                                print(f"\rProgress: {progress:.1f}%", end="", flush=True)
+                                print(
+                                    f"\rProgress: {progress:.1f}%", end="", flush=True
+                                )
 
                 # Register temp file for cleanup on error
                 register_temp(temp_file)
@@ -123,7 +125,7 @@ class DirectDownloader(BaseDownloader):
 
             # Check if metadata is missing
             missing_metadata = not artist or not title
-            
+
             # Use fallbacks if needed
             if missing_metadata:
                 artist = "Unknown"

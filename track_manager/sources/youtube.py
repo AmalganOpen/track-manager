@@ -146,12 +146,14 @@ class YouTubeDownloader(BaseDownloader):
         playlist_entries = []
 
         if url_type == "playlist":
-            with yt_dlp.YoutubeDL({
-                "quiet": True,
-                "no_warnings": True,
-                "extract_flat": "in_playlist",
-                **_auth_opts(),
-            }) as ydl:
+            with yt_dlp.YoutubeDL(
+                {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "extract_flat": "in_playlist",
+                    **_auth_opts(),
+                }
+            ) as ydl:
                 try:
                     info = ydl.extract_info(url, download=False)
                     is_playlist = info.get("_type") == "playlist"
@@ -162,7 +164,10 @@ class YouTubeDownloader(BaseDownloader):
                         playlist_title = info.get("title", "Unknown playlist")
 
                         print(f"📝 Playlist: {playlist_title}", flush=True)
-                        print(f"   Contains {track_count} video{'s' if track_count != 1 else ''}", flush=True)
+                        print(
+                            f"   Contains {track_count} video{'s' if track_count != 1 else ''}",
+                            flush=True,
+                        )
                         print()
 
                         response = input(f"Download all {track_count} tracks? [y/N]: ")
@@ -186,18 +191,35 @@ class YouTubeDownloader(BaseDownloader):
                     if is_private:
                         print("❌ Cannot access playlist", file=sys.stderr)
                         print()
-                        print("💡 This may be a private or members-only playlist.", file=sys.stderr)
+                        print(
+                            "💡 This may be a private or members-only playlist.",
+                            file=sys.stderr,
+                        )
                         print("   To download it, you need to:", file=sys.stderr)
-                        print("   1. Go to YouTube and open the playlist", file=sys.stderr)
-                        print("   2. Click 'Edit' → 'Playlist privacy'", file=sys.stderr)
-                        print("   3. Change from 'Private' to 'Unlisted'", file=sys.stderr)
+                        print(
+                            "   1. Go to YouTube and open the playlist", file=sys.stderr
+                        )
+                        print(
+                            "   2. Click 'Edit' → 'Playlist privacy'", file=sys.stderr
+                        )
+                        print(
+                            "   3. Change from 'Private' to 'Unlisted'", file=sys.stderr
+                        )
                         print(file=sys.stderr)
-                        print("   Note: 'Unlisted' means only people with the link can view it.", file=sys.stderr)
+                        print(
+                            "   Note: 'Unlisted' means only people with the link can view it.",
+                            file=sys.stderr,
+                        )
                         return
                     else:
-                        print(f"⚠️ Could not extract playlist info: {e}", file=sys.stderr)
+                        print(
+                            f"⚠️ Could not extract playlist info: {e}", file=sys.stderr
+                        )
                         print(file=sys.stderr)
-                        print("💡 If this is a private playlist, make sure it's set to 'Unlisted' instead.", file=sys.stderr)
+                        print(
+                            "💡 If this is a private playlist, make sure it's set to 'Unlisted' instead.",
+                            file=sys.stderr,
+                        )
                         return
 
         success = 0
@@ -263,7 +285,9 @@ class YouTubeDownloader(BaseDownloader):
                         continue
 
                     print("  ⬇️ Downloading from YouTube")
-                    if self._download_single_video(video_url, target_format, playlist_url):
+                    if self._download_single_video(
+                        video_url, target_format, playlist_url
+                    ):
                         success += 1
                     else:
                         failed += 1
@@ -291,8 +315,12 @@ class YouTubeDownloader(BaseDownloader):
 
                     for idx, entry in enumerate(entries, 1):
                         if entry:
-                            print(f"[{idx}/{total}] Processing: {entry.get('title', 'Unknown')}")
-                            if self._process_download(entry, target_format, playlist_url):
+                            print(
+                                f"[{idx}/{total}] Processing: {entry.get('title', 'Unknown')}"
+                            )
+                            if self._process_download(
+                                entry, target_format, playlist_url
+                            ):
                                 success += 1
                             else:
                                 failed += 1
@@ -498,7 +526,9 @@ class YouTubeDownloader(BaseDownloader):
 
         doc["provenance"]["track_url"] = info.get("webpage_url", "")
         doc["provenance"]["playlist_url"] = playlist_url
-        doc["provenance"]["source"] = self.__class__.__name__.replace("Downloader", "").lower()
+        doc["provenance"]["source"] = self.__class__.__name__.replace(
+            "Downloader", ""
+        ).lower()
         doc["provenance"]["original_format"] = original_format
         doc["provenance"]["original_bitrate"] = original_bitrate
         doc["provenance"]["downloaded_at"] = datetime.now(timezone.utc).isoformat()

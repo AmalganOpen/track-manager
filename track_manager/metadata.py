@@ -21,7 +21,7 @@ CSV_HEADERS = [
 def get_metadata_csv_path() -> Path:
     """Get the metadata review CSV path from config."""
     from .config import Config
-    
+
     config = Config()
     return config.metadata_csv
 
@@ -341,7 +341,7 @@ def show_full_metadata(file_path: Path):
 
         # Read all metadata
         audio = MutagenFile(str(file_path))
-        
+
         if audio is None:
             print("⚠️ Could not read metadata")
             return
@@ -350,17 +350,17 @@ def show_full_metadata(file_path: Path):
         if audio.info:
             print(f"🎵 Audio Properties:")
             print(f"   Duration: {audio.info.length:.2f}s")
-            if hasattr(audio.info, 'bitrate'):
+            if hasattr(audio.info, "bitrate"):
                 print(f"   Bitrate: {audio.info.bitrate // 1000} kbps")
-            if hasattr(audio.info, 'sample_rate'):
+            if hasattr(audio.info, "sample_rate"):
                 print(f"   Sample Rate: {audio.info.sample_rate} Hz")
-            if hasattr(audio.info, 'channels'):
+            if hasattr(audio.info, "channels"):
                 print(f"   Channels: {audio.info.channels}")
             print()
 
         # Display metadata tags
         print(f"🏷️  Metadata Tags:")
-        
+
         if isinstance(audio, MP4):
             # M4A/MP4 files
             for key, value in sorted(audio.tags.items()):
@@ -370,46 +370,48 @@ def show_full_metadata(file_path: Path):
                         value = value[0]
                     else:
                         value = ", ".join(str(v) for v in value)
-                
+
                 # Convert MP4 tag keys to readable names
                 tag_names = {
-                    '\xa9nam': 'Title',
-                    '\xa9ART': 'Artist',
-                    '\xa9alb': 'Album',
-                    '\xa9day': 'Year',
-                    '\xa9gen': 'Genre',
-                    'trkn': 'Track Number',
-                    'disk': 'Disk Number',
-                    '\xa9cmt': 'Comment',
-                    'covr': 'Cover Art',
-                    '----:com.apple.iTunes:ORIGINAL_BITRATE': 'Original Bitrate',
-                    '----:com.apple.iTunes:SOURCE': 'Source',
-                    '----:com.apple.iTunes:ISRC': 'ISRC',
+                    "\xa9nam": "Title",
+                    "\xa9ART": "Artist",
+                    "\xa9alb": "Album",
+                    "\xa9day": "Year",
+                    "\xa9gen": "Genre",
+                    "trkn": "Track Number",
+                    "disk": "Disk Number",
+                    "\xa9cmt": "Comment",
+                    "covr": "Cover Art",
+                    "----:com.apple.iTunes:ORIGINAL_BITRATE": "Original Bitrate",
+                    "----:com.apple.iTunes:SOURCE": "Source",
+                    "----:com.apple.iTunes:ISRC": "ISRC",
                 }
-                
+
                 readable_key = tag_names.get(key, key)
-                
+
                 # Handle binary data
                 if isinstance(value, bytes):
-                    if 'covr' in key.lower() or 'cover' in readable_key.lower():
+                    if "covr" in key.lower() or "cover" in readable_key.lower():
                         print(f"   {readable_key}: [Image data, {len(value)} bytes]")
                     else:
                         try:
-                            decoded = value.decode('utf-8')
+                            decoded = value.decode("utf-8")
                             print(f"   {readable_key}: {decoded}")
                         except:
-                            print(f"   {readable_key}: [Binary data, {len(value)} bytes]")
+                            print(
+                                f"   {readable_key}: [Binary data, {len(value)} bytes]"
+                            )
                 else:
                     print(f"   {readable_key}: {value}")
-        
+
         else:
             # MP3 and other formats using ID3 or easy tags
-            if hasattr(audio, 'tags') and audio.tags:
+            if hasattr(audio, "tags") and audio.tags:
                 for key in sorted(audio.tags.keys()):
                     value = audio.tags[key]
-                    
+
                     # Handle different tag types
-                    if hasattr(value, 'text'):
+                    if hasattr(value, "text"):
                         # ID3 tags have .text attribute
                         text = value.text
                         if isinstance(text, list):

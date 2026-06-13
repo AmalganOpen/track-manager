@@ -61,9 +61,16 @@ def read_original_provenance(file_path: Path) -> dict:
         audio = MutagenFile(str(file_path))
         if not audio or not audio.tags:
             return result
-        for key in ("TRACK_URL", "PLAYLIST_URL", "SOURCE", "ORIGINAL_FORMAT",
-                    "ORIGINAL_BITRATE", "ISRC", "UPGRADE_ATTEMPTS",
-                    "LAST_UPGRADE_ATTEMPT_AT"):
+        for key in (
+            "TRACK_URL",
+            "PLAYLIST_URL",
+            "SOURCE",
+            "ORIGINAL_FORMAT",
+            "ORIGINAL_BITRATE",
+            "ISRC",
+            "UPGRADE_ATTEMPTS",
+            "LAST_UPGRADE_ATTEMPT_AT",
+        ):
             val = _read_m4a_freeform(audio, key)
             if val is not None:
                 result[key.lower()] = val
@@ -119,15 +126,19 @@ def _write_upgrade_attempts(file_path: Path, attempts: int) -> None:
     # (migration always writes one) so we only handle m4a/mp3 here. For other
     # formats we silently skip rather than mutate something we don't own.
     try:
-        from mutagen.mp4 import MP4
         from mutagen.id3 import ID3, TXXX
+        from mutagen.mp4 import MP4
 
         if suffix == ".m4a":
             audio = MP4(str(file_path))
             if audio.tags is None:
                 audio.add_tags()
-            audio.tags["----:com.apple.iTunes:UPGRADE_ATTEMPTS"] = str(attempts).encode("utf-8")
-            audio.tags["----:com.apple.iTunes:LAST_UPGRADE_ATTEMPT_AT"] = now_iso.encode("utf-8")
+            audio.tags["----:com.apple.iTunes:UPGRADE_ATTEMPTS"] = str(attempts).encode(
+                "utf-8"
+            )
+            audio.tags["----:com.apple.iTunes:LAST_UPGRADE_ATTEMPT_AT"] = (
+                now_iso.encode("utf-8")
+            )
             audio.save()
         elif suffix == ".mp3":
             try:
@@ -146,8 +157,8 @@ def _write_upgrade_attempts(file_path: Path, attempts: int) -> None:
 def _patch_playlist_url(file_path: Path, playlist_url: str) -> None:
     """Write PLAYLIST_URL back into a file whose re-download left it absent."""
     try:
-        from mutagen.mp4 import MP4
         from mutagen.id3 import ID3, TXXX
+        from mutagen.mp4 import MP4
 
         if file_path.suffix.lower() == ".m4a":
             audio = MP4(str(file_path))
@@ -358,7 +369,9 @@ def upgrade_track(
             downloader = Downloader(config, output_dir=tmp_dir)
 
         try:
-            download_result = downloader.download(track_url, format="auto", show_header=False)
+            download_result = downloader.download(
+                track_url, format="auto", show_header=False
+            )
         except Exception as e:
             return False, f"Download failed: {e}"
         if download_result is False:
@@ -376,9 +389,7 @@ def upgrade_track(
             ".aiff",
             ".aif",
         }
-        new_files = [
-            f for f in tmp_dir.iterdir() if f.suffix.lower() in audio_exts
-        ]
+        new_files = [f for f in tmp_dir.iterdir() if f.suffix.lower() in audio_exts]
 
         if not new_files:
             return False, "Download produced no audio file"
@@ -526,8 +537,9 @@ def _refresh_aiff_metadata(
     else:
         doc = tm_blob.empty_document()
 
-    doc["provenance"]["track_url"] = original_provenance.get("track_url") \
-        or doc["provenance"].get("track_url")
+    doc["provenance"]["track_url"] = original_provenance.get("track_url") or doc[
+        "provenance"
+    ].get("track_url")
     if original_provenance.get("playlist_url"):
         doc["provenance"]["playlist_url"] = original_provenance["playlist_url"]
     doc["provenance"]["original_format"] = intermediate_format
@@ -551,6 +563,7 @@ def _refresh_aiff_metadata(
     cover_data = _extract_cover_bytes_any(new_source_file)
     if cover_data:
         from hashlib import sha256
+
         doc["cover_art"]["sha256"] = sha256(cover_data).hexdigest()
         doc["cover_art"]["embedded"] = True
 
@@ -564,17 +577,20 @@ def _extract_cover_bytes_any(path: Path) -> Optional[bytes]:
     try:
         if suffix in (".m4a", ".mp4"):
             from mutagen.mp4 import MP4
+
             tags = MP4(str(path)).tags
             if tags and "covr" in tags and tags["covr"]:
                 return bytes(tags["covr"][0])
         elif suffix == ".mp3":
             from mutagen.id3 import ID3
+
             tags = ID3(str(path))
             for frame in tags.getall("APIC"):
                 if frame.data:
                     return bytes(frame.data)
         elif suffix == ".flac":
             from mutagen.flac import FLAC
+
             audio = FLAC(str(path))
             if audio.pictures:
                 return bytes(audio.pictures[0].data)

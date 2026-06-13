@@ -16,19 +16,22 @@ and falls back to a small hardcoded set when monochrome.tf is unreachable.
 See docs/tidal-endpoints.md for the full testing/maintenance protocol.
 """
 
+import base64
+import json
 import os
 import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
-import base64
-import json
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
-from .rate_limiter import songlink_rate_limit, songlink_note_throttle, tidal_rate_limit
 
-_CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "track-manager"
+from .rate_limiter import songlink_note_throttle, songlink_rate_limit, tidal_rate_limit
+
+_CACHE_DIR = (
+    Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "track-manager"
+)
 _CACHE_FILE = _CACHE_DIR / "tidal_id_cache.json"
 _INSTANCES_CACHE_FILE = _CACHE_DIR / "monochrome_instances.json"
 _INSTANCES_URL = "https://monochrome.tf/instances.json"
@@ -73,7 +76,9 @@ def _fetch_instances() -> Tuple[Dict[str, List[str]], str]:
             if age < _INSTANCES_TTL:
                 # Cache is fresh enough — skip the network call entirely
                 data = json.loads(_INSTANCES_CACHE_FILE.read_text())
-                if isinstance(data.get("api"), list) and isinstance(data.get("streaming"), list):
+                if isinstance(data.get("api"), list) and isinstance(
+                    data.get("streaming"), list
+                ):
                     return _normalize_instances(data), "cache"
         except (OSError, json.JSONDecodeError):
             pass
@@ -83,7 +88,9 @@ def _fetch_instances() -> Tuple[Dict[str, List[str]], str]:
             r = requests.get(_INSTANCES_URL, timeout=8)
             r.raise_for_status()
             data = r.json()
-            if isinstance(data.get("api"), list) and isinstance(data.get("streaming"), list):
+            if isinstance(data.get("api"), list) and isinstance(
+                data.get("streaming"), list
+            ):
                 try:
                     _INSTANCES_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
                     _INSTANCES_CACHE_FILE.write_text(json.dumps(data, indent=2))
@@ -97,7 +104,9 @@ def _fetch_instances() -> Tuple[Dict[str, List[str]], str]:
     if _INSTANCES_CACHE_FILE.exists():
         try:
             data = json.loads(_INSTANCES_CACHE_FILE.read_text())
-            if isinstance(data.get("api"), list) and isinstance(data.get("streaming"), list):
+            if isinstance(data.get("api"), list) and isinstance(
+                data.get("streaming"), list
+            ):
                 return _normalize_instances(data), "cache"
         except (OSError, json.JSONDecodeError):
             pass
@@ -155,7 +164,9 @@ class TidalPublicClient:
         # `self.endpoint` is the pinned api endpoint (kept for backward
         # compatibility); `self.streaming_endpoint` is the pinned /track/
         # endpoint. Both update on first success in their respective pool.
-        self.endpoint: Optional[str] = self.api_endpoints[0] if self.api_endpoints else None
+        self.endpoint: Optional[str] = (
+            self.api_endpoints[0] if self.api_endpoints else None
+        )
         self.streaming_endpoint: Optional[str] = (
             self.streaming_endpoints[0] if self.streaming_endpoints else None
         )
@@ -188,9 +199,18 @@ class TidalPublicClient:
         Spotify appends ?si=<token> to shared URLs; passing these to song.link
         prevents it from serving a cached response and burns extra quota.
         """
-        _TRACKING_PARAMS = {"si", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"}
+        _TRACKING_PARAMS = {
+            "si",
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_term",
+            "utm_content",
+        }
         parsed = urlparse(url)
-        qs = {k: v for k, v in parse_qs(parsed.query).items() if k not in _TRACKING_PARAMS}
+        qs = {
+            k: v for k, v in parse_qs(parsed.query).items() if k not in _TRACKING_PARAMS
+        }
         clean = parsed._replace(query=urlencode(qs, doseq=True))
         return urlunparse(clean)
 
@@ -258,7 +278,10 @@ class TidalPublicClient:
                     # (and follow-up `tm` invocations) wait it out instead of
                     # immediately tripping another 429.
                     songlink_note_throttle(wait)
-                    if attempt >= max_retries or wait > self._SONGLINK_MAX_WAIT_PER_CALL:
+                    if (
+                        attempt >= max_retries
+                        or wait > self._SONGLINK_MAX_WAIT_PER_CALL
+                    ):
                         print(
                             f"⚠️ song.link 429 (Retry-After {wait:.0f}s); skipping TIDAL for this track",
                             file=sys.stderr,
@@ -331,7 +354,9 @@ class TidalPublicClient:
             self._save_isrc_cache()
         return tidal_id
 
-    def get_tidal_id_from_url(self, url: str, isrc: Optional[str] = None) -> Optional[str]:
+    def get_tidal_id_from_url(
+        self, url: str, isrc: Optional[str] = None
+    ) -> Optional[str]:
         """Get TIDAL track ID from any music platform URL using song.link.
 
         When *isrc* is provided the ISRC-based lookup path is used (which
@@ -406,10 +431,16 @@ class TidalPublicClient:
                 print(f"⚠️ TIDAL track info failed on {endpoint}: {e}", file=sys.stderr)
                 continue
             except (ValueError, KeyError) as e:
-                print(f"⚠️ TIDAL track info parsing failed on {endpoint}: {e}", file=sys.stderr)
+                print(
+                    f"⚠️ TIDAL track info parsing failed on {endpoint}: {e}",
+                    file=sys.stderr,
+                )
                 continue
 
-        print(f"❌ TIDAL track info: all {len(endpoints)} endpoints exhausted", file=sys.stderr)
+        print(
+            f"❌ TIDAL track info: all {len(endpoints)} endpoints exhausted",
+            file=sys.stderr,
+        )
         return None
 
     def _download_track_from_endpoint(
@@ -440,7 +471,9 @@ class TidalPublicClient:
             manifest_json = json.loads(base64.b64decode(manifest_b64))
             download_url = manifest_json.get("urls", [None])[0]
         elif manifest_mime == "application/dash+xml":
-            print("⚠️ Hi-Res MPD manifest not yet supported, falling back", file=sys.stderr)
+            print(
+                "⚠️ Hi-Res MPD manifest not yet supported, falling back", file=sys.stderr
+            )
             return False
         else:
             print(f"❌ Unknown manifest type: {manifest_mime}", file=sys.stderr)
@@ -508,10 +541,15 @@ class TidalPublicClient:
 
         for endpoint in endpoints:
             if endpoint != self.streaming_endpoint:
-                print(f"ℹ️ Trying alternate TIDAL streaming endpoint: {endpoint}", file=sys.stderr)
+                print(
+                    f"ℹ️ Trying alternate TIDAL streaming endpoint: {endpoint}",
+                    file=sys.stderr,
+                )
             for q in qualities:
                 try:
-                    if self._download_track_from_endpoint(endpoint, track_id, output_path, q):
+                    if self._download_track_from_endpoint(
+                        endpoint, track_id, output_path, q
+                    ):
                         self.streaming_endpoint = endpoint
                         return True
                     # Inner returned False (no manifest, MPD-only, missing URL).
@@ -520,7 +558,10 @@ class TidalPublicClient:
                     continue
                 except requests.HTTPError as e:
                     status = e.response.status_code if e.response is not None else None
-                    print(f"❌ TIDAL download failed on {endpoint} ({q}): {e}", file=sys.stderr)
+                    print(
+                        f"❌ TIDAL download failed on {endpoint} ({q}): {e}",
+                        file=sys.stderr,
+                    )
                     if status == 400:
                         return False  # malformed request — won't change anywhere
                     if status in (401, 403) or (status is not None and status >= 500):
@@ -532,11 +573,20 @@ class TidalPublicClient:
                     continue  # 404/429 — track/rate-limit specific, try next quality
                 except requests.RequestException as e:
                     # Connection-level (SSL/timeout/DNS) — endpoint dead.
-                    print(f"❌ TIDAL download failed on {endpoint} ({q}): {e}", file=sys.stderr)
+                    print(
+                        f"❌ TIDAL download failed on {endpoint} ({q}): {e}",
+                        file=sys.stderr,
+                    )
                     break
                 except (ValueError, KeyError) as e:
-                    print(f"❌ TIDAL download parsing failed on {endpoint} ({q}): {e}", file=sys.stderr)
+                    print(
+                        f"❌ TIDAL download parsing failed on {endpoint} ({q}): {e}",
+                        file=sys.stderr,
+                    )
                     continue
 
-        print(f"❌ TIDAL download: all {len(endpoints)} streaming endpoints exhausted", file=sys.stderr)
+        print(
+            f"❌ TIDAL download: all {len(endpoints)} streaming endpoints exhausted",
+            file=sys.stderr,
+        )
         return False

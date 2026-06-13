@@ -175,10 +175,10 @@ def _probe_for_xml(path: Path) -> dict:
 def _decode_rb_url(url: str) -> Path:
     """Decode a Rekordbox file URL into a Path. Accepts both forms."""
     if url.startswith(_RB_URL_PREFIX):
-        rest = url[len(_RB_URL_PREFIX):]
+        rest = url[len(_RB_URL_PREFIX) :]
     elif url.startswith("file:///"):
         # spec-correct form: file:///Users/...
-        rest = url[len("file://"):]
+        rest = url[len("file://") :]
     else:
         raise ValueError(f"unrecognised URL scheme: {url[:40]!r}")
 

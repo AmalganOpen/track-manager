@@ -75,14 +75,10 @@ def probe(endpoint: str, track_id: str) -> dict:
     # /info/ — metadata, doesn't need TIDAL OAuth on the server side
     t0 = time.time()
     try:
-        r = requests.get(
-            f"{endpoint}/info/", params={"id": track_id}, timeout=TIMEOUT
-        )
+        r = requests.get(f"{endpoint}/info/", params={"id": track_id}, timeout=TIMEOUT)
         out["info_status"] = f"HTTP {r.status_code}"
         out["info_time"] = time.time() - t0
-        out["info_ok"] = (
-            r.ok and (r.json().get("data") or {}).get("title") is not None
-        )
+        out["info_ok"] = r.ok and (r.json().get("data") or {}).get("title") is not None
     except requests.RequestException as e:
         out["info_status"] = type(e).__name__
         out["info_time"] = time.time() - t0
@@ -187,7 +183,9 @@ def main() -> int:
 
     if args.endpoints:
         api_hosts = streaming_hosts = [e.rstrip("/") for e in args.endpoints]
-        print(f"Probing {len(api_hosts)} custom endpoints with track_id={args.track_id}…\n")
+        print(
+            f"Probing {len(api_hosts)} custom endpoints with track_id={args.track_id}…\n"
+        )
     else:
         api_hosts, streaming_hosts = fetch_master_list(args.include_historic)
         print(
@@ -210,8 +208,14 @@ def main() -> int:
         print(f"\n=== {title} ===")
         rows = sorted(
             (by_ep[h] for h in hosts if h in by_ep),
-            key=lambda r: classify(r) if focus == "track" else (
-                (0, r.get("info_time", 0)) if r.get("info_ok") else (1, r.get("info_time", 0))
+            key=lambda r: (
+                classify(r)
+                if focus == "track"
+                else (
+                    (0, r.get("info_time", 0))
+                    if r.get("info_ok")
+                    else (1, r.get("info_time", 0))
+                )
             ),
         )
         # Both columns are always shown; left is /info/ (metadata), right is /track/ (audio).
@@ -236,7 +240,9 @@ def main() -> int:
     for ep in streaming_ok:
         print(f"     {ep}")
     if not streaming_ok:
-        print("     (none — TIDAL OAuth blackout across the ecosystem; wait for re-issue)")
+        print(
+            "     (none — TIDAL OAuth blackout across the ecosystem; wait for re-issue)"
+        )
     print(f"\nTotal probe time: {time.time() - t0:.1f}s")
     return 0 if streaming_ok else 1
 

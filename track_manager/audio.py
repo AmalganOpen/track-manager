@@ -69,16 +69,25 @@ def probe_audio(path: Path) -> dict[str, Any]:
     try:
         cmd = [
             "ffprobe",
-            "-v", "error",
-            "-select_streams", "a:0",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
             "-show_entries",
             "stream=codec_name,sample_rate,bits_per_raw_sample,bits_per_sample,channels,bit_rate,duration:format=bit_rate,duration",
-            "-of", "json",
+            "-of",
+            "json",
             str(path),
         ]
-        out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, check=True, timeout=30
+        )
         data = json.loads(out.stdout)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError):
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+    ):
         return info
 
     streams = data.get("streams") or []
@@ -143,10 +152,13 @@ def encode_to_aiff(src: Path, dst: Path) -> Path:
     """Encode to AIFF (PCM_S16BE, 44.1 kHz stereo)."""
     cmd = [
         "ffmpeg",
-        "-i", str(src),
+        "-i",
+        str(src),
         "-vn",
-        "-c:a", "pcm_s16be",
-        "-ar", "44100",
+        "-c:a",
+        "pcm_s16be",
+        "-ar",
+        "44100",
         # Explicit muxer: migration writes to ``*.aiff.tmp`` so the suffix is
         # not ``.aiff`` and ffmpeg cannot infer the output format from the path.
         "-f",
@@ -162,11 +174,15 @@ def encode_to_m4a(src: Path, dst: Path, bitrate_kbps: int = 256) -> Path:
     """Encode to M4A (AAC, default 256 kbps, 48 kHz)."""
     cmd = [
         "ffmpeg",
-        "-i", str(src),
+        "-i",
+        str(src),
         "-vn",
-        "-c:a", "aac",
-        "-b:a", f"{bitrate_kbps}k",
-        "-movflags", "+faststart",
+        "-c:a",
+        "aac",
+        "-b:a",
+        f"{bitrate_kbps}k",
+        "-movflags",
+        "+faststart",
         "-y",
         str(dst),
     ]
@@ -178,10 +194,13 @@ def encode_to_mp3(src: Path, dst: Path, bitrate_kbps: int = 320) -> Path:
     """Encode to MP3 (libmp3lame CBR, default 320 kbps)."""
     cmd = [
         "ffmpeg",
-        "-i", str(src),
+        "-i",
+        str(src),
         "-vn",
-        "-c:a", "libmp3lame",
-        "-b:a", f"{bitrate_kbps}k",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        f"{bitrate_kbps}k",
         "-y",
         str(dst),
     ]
@@ -317,7 +336,9 @@ def apply_basic_tags(
         raise ValueError(f"Unsupported audio format for tagging: {suffix}")
 
 
-def _apply_m4a_tags(path: Path, doc: dict[str, Any], cover_data: Optional[bytes]) -> None:
+def _apply_m4a_tags(
+    path: Path, doc: dict[str, Any], cover_data: Optional[bytes]
+) -> None:
     audio = MP4(str(path))
     if audio.tags is None:
         audio.add_tags()
@@ -326,8 +347,15 @@ def _apply_m4a_tags(path: Path, doc: dict[str, Any], cover_data: Optional[bytes]
 
     # Clear basic tags (don't touch our blob atom or anything else namespaced).
     _BASIC_M4A_KEYS = (
-        "\xa9nam", "\xa9ART", "aART", "\xa9alb", "\xa9day",
-        "\xa9gen", "trkn", "disk", "covr",
+        "\xa9nam",
+        "\xa9ART",
+        "aART",
+        "\xa9alb",
+        "\xa9day",
+        "\xa9gen",
+        "trkn",
+        "disk",
+        "covr",
         "----:com.apple.iTunes:ISRC",
         "----:com.apple.iTunes:LABEL",
     )
@@ -370,8 +398,19 @@ def _apply_id3_tags(audio, doc: dict[str, Any], cover_data: Optional[bytes]) -> 
     track = doc.get("track") or {}
 
     # Clear the basic frames we own; leave GEOB / private / non-basic frames alone.
-    for frame_id in ("TIT2", "TPE1", "TPE2", "TALB", "TDRC", "TCON",
-                     "TRCK", "TPOS", "TSRC", "TPUB", "APIC"):
+    for frame_id in (
+        "TIT2",
+        "TPE1",
+        "TPE2",
+        "TALB",
+        "TDRC",
+        "TCON",
+        "TRCK",
+        "TPOS",
+        "TSRC",
+        "TPUB",
+        "APIC",
+    ):
         tags.delall(frame_id)
 
     if track.get("title"):
@@ -451,9 +490,12 @@ def thumbnail_to_jpeg(path: Path) -> Optional[bytes]:
         out = subprocess.run(
             [
                 "ffmpeg",
-                "-i", str(path),
-                "-f", "image2pipe",
-                "-vcodec", "mjpeg",
+                "-i",
+                str(path),
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
                 "-",
             ],
             capture_output=True,

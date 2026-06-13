@@ -11,7 +11,9 @@ def test_upgrade_track_accepts_aiff_download(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setattr(
         tm_upgrade,
         "read_original_provenance",
-        lambda _p: {"track_url": "https://open.spotify.com/track/3VssoiwImUsnSzWSfjoQTW"},
+        lambda _p: {
+            "track_url": "https://open.spotify.com/track/3VssoiwImUsnSzWSfjoQTW"
+        },
     )
     monkeypatch.setattr(
         tm_upgrade,
@@ -41,7 +43,9 @@ def test_upgrade_track_accepts_aiff_download(monkeypatch, tmp_path: Path) -> Non
         def __init__(self) -> None:
             self.output_dir = tmp_path
 
-        def download(self, _url: str, format: str = "auto", show_header: bool = False) -> None:
+        def download(
+            self, _url: str, format: str = "auto", show_header: bool = False
+        ) -> None:
             assert format == "auto"
             assert show_header is False
             (self.output_dir / "Hether - Nebulous Tango.aiff").write_bytes(b"new-audio")
@@ -66,7 +70,9 @@ def test_upgrade_track_skips_reencode_when_download_already_aiff(
     monkeypatch.setattr(
         tm_upgrade,
         "read_original_provenance",
-        lambda _p: {"track_url": "https://open.spotify.com/track/6rUcS9i07F6okIe8wujs5J"},
+        lambda _p: {
+            "track_url": "https://open.spotify.com/track/6rUcS9i07F6okIe8wujs5J"
+        },
     )
     monkeypatch.setattr(
         tm_upgrade,
@@ -98,7 +104,9 @@ def test_upgrade_track_skips_reencode_when_download_already_aiff(
         def __init__(self) -> None:
             self.output_dir = tmp_path
 
-        def download(self, _url: str, format: str = "auto", show_header: bool = False) -> None:
+        def download(
+            self, _url: str, format: str = "auto", show_header: bool = False
+        ) -> None:
             assert format == "auto"
             assert show_header is False
             (self.output_dir / "Gucci Mane - Lemonade.aiff").write_bytes(b"new-audio")
@@ -159,7 +167,9 @@ def test_upgrade_track_uses_download_provenance_for_quality_check(
         def __init__(self) -> None:
             self.output_dir = tmp_path
 
-        def download(self, _url: str, format: str = "auto", show_header: bool = False) -> None:
+        def download(
+            self, _url: str, format: str = "auto", show_header: bool = False
+        ) -> None:
             assert format == "auto"
             assert show_header is False
             (self.output_dir / "lijan， 5EB - STONER.aiff").write_bytes(b"new-audio")
@@ -184,7 +194,9 @@ def test_upgrade_track_reports_source_download_failure(
     monkeypatch.setattr(
         tm_upgrade,
         "read_original_provenance",
-        lambda _p: {"track_url": "https://soundcloud.com/reiharakami/put-off-and-other-matsuo-ohno"},
+        lambda _p: {
+            "track_url": "https://soundcloud.com/reiharakami/put-off-and-other-matsuo-ohno"
+        },
     )
     monkeypatch.setattr(
         tm_upgrade,

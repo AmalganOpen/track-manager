@@ -119,7 +119,9 @@ def write_blob(path: Path, data: dict[str, Any]) -> None:
     tags on the file are left untouched.
     """
     document = merge_into_template(data)
-    payload = json.dumps(document, indent=2, sort_keys=False, ensure_ascii=False).encode("utf-8")
+    payload = json.dumps(
+        document, indent=2, sort_keys=False, ensure_ascii=False
+    ).encode("utf-8")
 
     suffix = path.suffix.lower()
     if suffix in (".m4a", ".mp4"):
@@ -158,7 +160,9 @@ def _write_aiff(path: Path, payload: bytes) -> None:
 
 def _set_geob(tags: ID3, payload: bytes) -> None:
     # Remove any pre-existing tm:metadata GEOB frames, then add the fresh one.
-    existing = [f for f in tags.getall("GEOB") if getattr(f, "desc", None) == _GEOB_DESC]
+    existing = [
+        f for f in tags.getall("GEOB") if getattr(f, "desc", None) == _GEOB_DESC
+    ]
     for frame in existing:
         tags.delall(frame.HashKey)
     tags.add(

@@ -4,9 +4,9 @@ import json
 import os
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from threading import Lock
-from collections import deque
 from typing import Optional
 
 
@@ -47,9 +47,7 @@ class RateLimiter:
                 elapsed = now - self.last_update
 
                 # Refill tokens based on elapsed time
-                self.tokens = min(
-                    self.burst, self.tokens + elapsed * self.rate
-                )
+                self.tokens = min(self.burst, self.tokens + elapsed * self.rate)
                 self.last_update = now
 
                 if self.tokens >= 1:
@@ -77,20 +75,18 @@ class RateLimiter:
         with self.lock:
             now = time.monotonic()
             elapsed = now - self.last_update
-            
+
             # Update tokens before reading stats
-            self.tokens = min(
-                self.burst, self.tokens + elapsed * self.rate
-            )
+            self.tokens = min(self.burst, self.tokens + elapsed * self.rate)
             self.last_update = now
-            
+
             recent_calls = [t for t in self.call_times if now - t < 60]
-            
+
             return {
-                'calls_last_minute': len(recent_calls),
-                'tokens_available': int(self.tokens),
-                'burst_size': self.burst,
-                'rate': self.rate
+                "calls_last_minute": len(recent_calls),
+                "tokens_available": int(self.tokens),
+                "burst_size": self.burst,
+                "rate": self.rate,
             }
 
 
@@ -150,7 +146,10 @@ class PersistentRateLimiter:
                 # Wait until the oldest timestamp falls outside the window
                 oldest = min(timestamps)
                 wait = self.window - (now - oldest) + 0.05  # small buffer
-                print(f"⏳ song.link rate limit ({self.max_calls}/{self.window:.0f}s): waiting {wait:.1f}s...", file=sys.stderr)
+                print(
+                    f"⏳ song.link rate limit ({self.max_calls}/{self.window:.0f}s): waiting {wait:.1f}s...",
+                    file=sys.stderr,
+                )
                 time.sleep(wait)
 
     def _cooldown_file(self) -> Path:
@@ -179,7 +178,9 @@ class PersistentRateLimiter:
             pass
 
 
-_CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "track-manager"
+_CACHE_DIR = (
+    Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "track-manager"
+)
 
 # Global rate limiters for each service
 # Note: Spotify rate limit is very conservative (1/sec) because spotdl
@@ -189,19 +190,21 @@ _spotify_limiter = RateLimiter(calls_per_second=1.0, burst_size=3)
 # song.link: 10 req/min hard limit. Persistent across invocations so rapid
 # successive `tm` runs don't collectively exceed the limit.
 _songlink_limiter = PersistentRateLimiter(
-    max_calls=6,           # documented limit is 10/min but observed 429s at 8/min
+    max_calls=6,  # documented limit is 10/min but observed 429s at 8/min
     window_seconds=60.0,
     state_file=_CACHE_DIR / "songlink_calls.json",
 )
 _dab_limiter = RateLimiter(calls_per_second=2.0, burst_size=5)
-_tidal_limiter = RateLimiter(calls_per_second=2.0, burst_size=5)  # Conservative for public APIs
+_tidal_limiter = RateLimiter(
+    calls_per_second=2.0, burst_size=5
+)  # Conservative for public APIs
 
 
 def spotify_rate_limit(show_progress: bool = False) -> None:
     """Apply Spotify API rate limiting."""
     if show_progress:
         stats = _spotify_limiter.get_stats()
-        if stats['tokens_available'] < 1:
+        if stats["tokens_available"] < 1:
             print("⏳ Rate limiting active (Spotify API)...", file=sys.stderr)
     _spotify_limiter.acquire()
 
@@ -220,7 +223,7 @@ def dab_rate_limit(show_progress: bool = False) -> None:
     """Apply DAB Music API rate limiting."""
     if show_progress:
         stats = _dab_limiter.get_stats()
-        if stats['tokens_available'] < 1:
+        if stats["tokens_available"] < 1:
             print("⏳ Rate limiting active (DAB Music API)...", file=sys.stderr)
     _dab_limiter.acquire()
 
@@ -229,7 +232,7 @@ def tidal_rate_limit(show_progress: bool = False) -> None:
     """Apply TIDAL API rate limiting."""
     if show_progress:
         stats = _tidal_limiter.get_stats()
-        if stats['tokens_available'] < 1:
+        if stats["tokens_available"] < 1:
             print("⏳ Rate limiting active (TIDAL API)...", file=sys.stderr)
     _tidal_limiter.acquire()
 
@@ -240,12 +243,12 @@ def get_rate_limit_stats() -> dict:
     sl_timestamps = _songlink_limiter._read_timestamps()
     sl_recent = [t for t in sl_timestamps if now - t < _songlink_limiter.window]
     return {
-        'spotify': _spotify_limiter.get_stats(),
-        'songlink': {
-            'calls_last_minute': len(sl_recent),
-            'max_calls': _songlink_limiter.max_calls,
-            'window_seconds': _songlink_limiter.window,
+        "spotify": _spotify_limiter.get_stats(),
+        "songlink": {
+            "calls_last_minute": len(sl_recent),
+            "max_calls": _songlink_limiter.max_calls,
+            "window_seconds": _songlink_limiter.window,
         },
-        'dab_music': _dab_limiter.get_stats(),
-        'tidal': _tidal_limiter.get_stats(),
+        "dab_music": _dab_limiter.get_stats(),
+        "tidal": _tidal_limiter.get_stats(),
     }

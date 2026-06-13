@@ -103,7 +103,7 @@ def get_audio_info(file_path: Path) -> Optional[Dict]:
 
         # Get encoded bitrate as fallback
         encoded_bitrate = getattr(audio.info, "bitrate", 0)
-        
+
         # Provenance bitrate is the source quality, encoded_bitrate is output quality.
         original_bitrate = _extract_original_bitrate_bps(file_path, audio)
 
@@ -114,14 +114,15 @@ def get_audio_info(file_path: Path) -> Optional[Dict]:
             bitrate = original_bitrate
         else:
             bitrate = encoded_bitrate
-        
+
         info = {
             "file": file_path.name,
             "format": file_path.suffix.upper()[1:],  # .mp3 -> MP3
             "duration": getattr(audio.info, "length", 0),
             "bitrate": bitrate,
             "encoded_bitrate": encoded_bitrate,  # Keep for comparison
-            "is_upsampled": original_bitrate is not None and original_bitrate < encoded_bitrate,
+            "is_upsampled": original_bitrate is not None
+            and original_bitrate < encoded_bitrate,
             "sample_rate": getattr(audio.info, "sample_rate", 0),
             "channels": getattr(audio.info, "channels", 0),
         }
@@ -164,7 +165,9 @@ def format_duration(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-def analyze_library(output_dir: Path, detailed: bool = False, verbose: bool = False) -> Dict:
+def analyze_library(
+    output_dir: Path, detailed: bool = False, verbose: bool = False
+) -> Dict:
     """Analyze audio quality across library.
 
     Args:
@@ -264,45 +267,49 @@ def analyze_library(output_dir: Path, detailed: bool = False, verbose: bool = Fa
 
         # Get files with valid bitrates
         files_with_bitrate = [f for f in files_info if f["bitrate"] > 0]
-        
+
         if files_with_bitrate:
             # Sort by bitrate
             sorted_by_bitrate = sorted(files_with_bitrate, key=lambda x: x["bitrate"])
-            
+
             # Show worst quality (lowest bitrate)
             print("📉 Lowest Quality Tracks (5 worst):")
             print(f"{'-' * 80}")
             for info in sorted_by_bitrate[:5]:
-                bitrate_str = format_bitrate(info['bitrate'])
-                if info.get('is_upsampled'):
-                    bitrate_str += f" (encoded as {format_bitrate(info['encoded_bitrate'])})"
+                bitrate_str = format_bitrate(info["bitrate"])
+                if info.get("is_upsampled"):
+                    bitrate_str += (
+                        f" (encoded as {format_bitrate(info['encoded_bitrate'])})"
+                    )
                 print(f"  {bitrate_str:>30} - {info['path']}")
             print()
-            
+
             # Show best quality (highest bitrate)
             print("📈 Highest Quality Tracks (5 best):")
             print(f"{'-' * 80}")
             for info in sorted_by_bitrate[-5:][::-1]:  # Reverse to show highest first
-                bitrate_str = format_bitrate(info['bitrate'])
-                if info.get('is_upsampled'):
-                    bitrate_str += f" (encoded as {format_bitrate(info['encoded_bitrate'])})"
+                bitrate_str = format_bitrate(info["bitrate"])
+                if info.get("is_upsampled"):
+                    bitrate_str += (
+                        f" (encoded as {format_bitrate(info['encoded_bitrate'])})"
+                    )
                 print(f"  {bitrate_str:>30} - {info['path']}")
             print()
-            
+
             # Show upsampled tracks
-            upsampled = [f for f in files_with_bitrate if f.get('is_upsampled')]
+            upsampled = [f for f in files_with_bitrate if f.get("is_upsampled")]
             if upsampled:
                 print("⚠️  Upsampled Tracks (encoded higher than source):")
                 print(f"{'-' * 80}")
                 # Sort by difference (most upsampled first)
                 upsampled_sorted = sorted(
                     upsampled,
-                    key=lambda x: x['encoded_bitrate'] - x['bitrate'],
-                    reverse=True
+                    key=lambda x: x["encoded_bitrate"] - x["bitrate"],
+                    reverse=True,
                 )
                 for info in upsampled_sorted[:10]:  # Show top 10
-                    source_rate = format_bitrate(info['bitrate'])
-                    encoded_rate = format_bitrate(info['encoded_bitrate'])
+                    source_rate = format_bitrate(info["bitrate"])
+                    encoded_rate = format_bitrate(info["encoded_bitrate"])
                     print(f"  {source_rate:>10} → {encoded_rate:>10} - {info['path']}")
                 if len(upsampled) > 10:
                     print(f"  ... and {len(upsampled) - 10} more upsampled tracks")

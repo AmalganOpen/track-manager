@@ -31,7 +31,9 @@ class TestYouTubePredownloadCheck:
         config = SimpleNamespace(duplicate_handling="skip")
         return YouTubeDownloader(config, tmp_path)
 
-    def test_duplicate_detected_metadata_only(self, tmp_path: Path, monkeypatch) -> None:
+    def test_duplicate_detected_metadata_only(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         dl = self._downloader(tmp_path)
         ydl = _FakeYDL(meta={"artist": "A", "title": "T"})
         monkeypatch.setattr(dl, "check_duplicate_for", lambda a, t, **k: True)
@@ -55,7 +57,9 @@ class TestYouTubePredownloadCheck:
 
 
 class TestDirectPredownloadCheck:
-    def test_skips_without_fetching_when_url_owned(self, tmp_path: Path, monkeypatch) -> None:
+    def test_skips_without_fetching_when_url_owned(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         config = SimpleNamespace(
             duplicate_handling="skip", failed_log=tmp_path / "failed.log"
         )

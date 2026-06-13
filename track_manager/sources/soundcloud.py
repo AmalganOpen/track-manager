@@ -162,7 +162,9 @@ class SoundCloudDownloader(YouTubeDownloader):
                 print()
                 continue
 
-            if self._download_single(track_url, target_format, playlist_url=url, label=label):
+            if self._download_single(
+                track_url, target_format, playlist_url=url, label=label
+            ):
                 success += 1
             else:
                 failed += 1

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import requests
+
 from .rate_limiter import dab_rate_limit
 
 
@@ -56,9 +57,10 @@ class DABMusicClient:
 
             # Session cookie is automatically stored in self.session
             print("✅ Logged in to DAB Music")
-            
+
             # Small delay to allow session to propagate across backend services
             import time
+
             time.sleep(0.5)
 
         except requests.RequestException as e:
@@ -79,10 +81,10 @@ class DABMusicClient:
             session = requests.Session()
             session.headers.update(self.session.headers)
             session.cookies.update(self.session.cookies)
-            
+
             # Apply rate limiting
             dab_rate_limit()
-            
+
             response = session.get(
                 f"{self.endpoint}/api/search",
                 params={"q": isrc, "type": "track"},
@@ -128,7 +130,7 @@ class DABMusicClient:
             session = requests.Session()
             session.headers.update(self.session.headers)
             session.cookies.update(self.session.cookies)
-            
+
             # Get stream URL with rate limiting
             dab_rate_limit()
             response = session.get(
@@ -154,7 +156,7 @@ class DABMusicClient:
             # Save to file
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_bytes(response.content)
-            
+
             # Explicitly close session
             session.close()
 
