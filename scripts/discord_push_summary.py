@@ -121,13 +121,18 @@ def summarize_with_claude(
     api_key: str,
     model: str,
 ) -> str:
-    prompt = f"""Summarize this git push for a Discord notification in the track-manager repo.
+    prompt = f"""Summarize this software update for a Discord notification to end users of track-manager (a music download and library tool).
 
-Write 2-4 short sentences for developers. Mention the main areas/files touched and what changed at a high level. Skip boilerplate and test-only churn unless it is the whole push. Do not use markdown headings or bullet lists.
+Write 2-3 short sentences in plain, friendly language. Explain what is new, fixed, or improved from the user's perspective — how it affects downloading, playlists, metadata, duplicates, or day-to-day use.
+
+Rules:
+- Do NOT mention file names, code, tests, CI, refactors, or internal implementation details
+- Do NOT use markdown headings or bullet lists
+- Skip changes that are invisible to users (tests, tooling, docs-only) unless that is the whole update
+- If the change is mostly internal, say so briefly in user-friendly terms
 
 Repository: {repo}
 Branch: {branch}
-Pushed by: {pusher}
 
 Commits:
 {context["commit_log"]}

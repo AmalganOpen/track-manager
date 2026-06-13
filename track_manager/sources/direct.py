@@ -93,7 +93,9 @@ class DirectDownloader(BaseDownloader):
                 if self._process_download(temp_file, url, format):
                     print("✅ Download complete")
                 else:
-                    print("⚠️ Download completed but processing failed", file=sys.stderr)
+                    print(
+                        "⚠️ Download completed but processing failed", file=sys.stderr
+                    )
                     self.log_failure(url, "Processing failed")
 
         except requests.exceptions.RequestException as e:

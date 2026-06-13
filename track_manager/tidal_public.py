@@ -406,7 +406,9 @@ class TidalPublicClient:
 
         for endpoint in endpoints:
             if endpoint != self.endpoint:
-                print(f"ℹ️ Trying alternate TIDAL endpoint: {endpoint}", file=sys.stderr)
+                print(
+                    f"ℹ️ Trying alternate TIDAL endpoint: {endpoint}", file=sys.stderr
+                )
             try:
                 tidal_rate_limit()
                 response = self.session.get(
@@ -472,7 +474,8 @@ class TidalPublicClient:
             download_url = manifest_json.get("urls", [None])[0]
         elif manifest_mime == "application/dash+xml":
             print(
-                "⚠️ Hi-Res MPD manifest not yet supported, falling back", file=sys.stderr
+                "⚠️ Hi-Res MPD manifest not yet supported, falling back",
+                file=sys.stderr,
             )
             return False
         else:
