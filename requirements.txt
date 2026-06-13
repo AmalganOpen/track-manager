@@ -2,7 +2,7 @@
 
 # Core functionality
 yt-dlp>=2026.2.4           # YouTube and SoundCloud downloads (2026.2.4+ required for recent YouTube API changes)
-spotdl>=4.2.0              # Spotify downloads
+spotdl>=4.4.3              # Spotify downloads (requires Python >=3.10)
 requests>=2.31.0           # Direct URL downloads
 mutagen>=1.47.0            # Audio metadata handling
 pyyaml>=6.0                # Configuration
