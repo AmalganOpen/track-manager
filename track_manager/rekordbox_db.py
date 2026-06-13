@@ -265,7 +265,7 @@ def plan_update_to_aiff(
             already_aiff.append(track)
             continue
 
-        new_path = track.folder_path.with_suffix(".aiff")
+        new_path = _target_aiff_path(track.folder_path, library)
         if not new_path.exists():
             no_aiff.append(track)
             continue
@@ -357,6 +357,23 @@ def update_paths_to_aiff(
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+
+def _target_aiff_path(track_path: Path, library: Path) -> Path:
+    """Where the migrated ``.aiff`` for ``track_path`` should live.
+
+    Normally this is the same path with an ``.aiff`` suffix. But when
+    Rekordbox still points at a file that ``migrate-to-aiff`` already moved
+    into ``.tm-migration-backup/``, the migrated ``.aiff`` lives at the
+    library root (``<library>/<stem>.aiff``), not inside the backup folder.
+    Detect that case and resolve to the library root so half-migrated tracks
+    relink correctly instead of being reported as "no .aiff on disk".
+    """
+    from .migrate import BACKUP_DIRNAME
+
+    if BACKUP_DIRNAME in track_path.parts:
+        return library / f"{track_path.stem}.aiff"
+    return track_path.with_suffix(".aiff")
 
 
 def _is_inside(child: Path, parent: Path) -> bool:
