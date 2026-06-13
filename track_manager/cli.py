@@ -130,7 +130,10 @@ def download(url: str, format: str, output: Optional[str], dumb: bool, no_cache:
     help="Check specific file for duplicates",
 )
 @click.option(
-    "--output", "-o", type=click.Path(), help="Library directory to scan (overrides config)"
+    "--output",
+    "-o",
+    type=click.Path(),
+    help="Library directory to scan (overrides config)",
 )
 def check_duplicates(file: Optional[str], output: Optional[str]):
     """Check for duplicate tracks in library."""
@@ -147,7 +150,10 @@ def check_duplicates(file: Optional[str], output: Optional[str]):
 
 @cli.command("verify-metadata")
 @click.option(
-    "--output", "-o", type=click.Path(), help="Library directory to scan (overrides config)"
+    "--output",
+    "-o",
+    type=click.Path(),
+    help="Library directory to scan (overrides config)",
 )
 def verify_metadata(output: Optional[str]):
     """Verify metadata quality in library."""
@@ -160,9 +166,14 @@ def verify_metadata(output: Optional[str]):
 
 @cli.command("check-quality")
 @click.option("--detailed", "-d", is_flag=True, help="Show detailed info for each file")
-@click.option("--verbose", "-v", is_flag=True, help="Show outlier tracks (worst/best quality)")
 @click.option(
-    "--output", "-o", type=click.Path(), help="Library directory to scan (overrides config)"
+    "--verbose", "-v", is_flag=True, help="Show outlier tracks (worst/best quality)"
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    help="Library directory to scan (overrides config)",
 )
 def check_quality(detailed: bool, verbose: bool, output: Optional[str]):
     """Check audio quality of tracks in library."""
@@ -171,6 +182,121 @@ def check_quality(detailed: bool, verbose: bool, output: Optional[str]):
     config = Config()
     library_dir = Path(output) if output else config.output_dir
     analyze_library(library_dir, detailed, verbose)
+
+
+@cli.command("check-compat")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    help="Library directory to scan (overrides config)",
+)
+@click.option(
+    "--all",
+    "scan_all",
+    is_flag=True,
+    help="Audit the whole Rekordbox collection (master.db) instead of just the "
+    "library directory. Requires Rekordbox to be CLOSED.",
+)
+def check_compat(output: Optional[str], scan_all: bool):
+    """Audit tracks for CDJ-2000NXS playability.
+
+    The original CDJ-2000NXS (2012) has a strict decoder: AIFF/WAV must be
+    uncompressed PCM at 16/24-bit and 44.1/48 kHz; AAC and MP3 are capped at
+    48 kHz; FLAC, Apple Lossless, 32-bit float, compressed AIFF-C, and
+    WAVE_FORMAT_EXTENSIBLE WAVs are all rejected.
+
+    By default this scans the configured library directory on disk (fast, no
+    database lock). Pass --all to instead audit every track in Rekordbox's
+    master.db, which mirrors what the "export to device" popup checks.
+    """
+    from . import compat as tm_compat
+
+    config = Config()
+    library_dir = Path(output) if output else config.output_dir
+
+    if scan_all:
+        results = _collect_compat_from_rekordbox(library_dir)
+    else:
+        if not library_dir.exists():
+            click.echo(f"❌ Library directory not found: {library_dir}", err=True)
+            sys.exit(1)
+        click.echo(f"🔍 Scanning {library_dir} for CDJ-2000NXS compatibility...")
+        click.echo()
+        results = tm_compat.scan_dir(library_dir)
+
+    if not results:
+        click.echo("No audio files found to check.")
+        return
+
+    compatible = [(p, r) for p, r in results if r.compatible]
+    unknown = [(p, r) for p, r in results if not r.compatible and r.unknown]
+    incompatible = [(p, r) for p, r in results if not r.compatible and not r.unknown]
+
+    click.echo(f"Checked {len(results)} track(s):")
+    click.echo(f"  ✅ Compatible:   {len(compatible)}")
+    click.echo(f"  ❌ Incompatible: {len(incompatible)}")
+    click.echo(f"  ⚠️  Unknown:      {len(unknown)}")
+
+    if incompatible:
+        click.echo()
+        click.echo("Incompatible with CDJ-2000NXS:")
+        for p, r in incompatible:
+            click.echo(f"  ❌ {p.name}: {r.reason}")
+
+    if unknown:
+        click.echo()
+        click.echo("Could not verify (manual check recommended):")
+        for p, r in unknown:
+            click.echo(f"  ⚠️  {p.name}: {r.reason}")
+
+    if incompatible:
+        sys.exit(1)
+    click.echo()
+    click.echo("🎉 All checked tracks are CDJ-2000NXS compatible.")
+
+
+def _collect_compat_from_rekordbox(library_dir: Path) -> list:
+    """Classify every on-disk track Rekordbox knows about (requires it closed)."""
+    from . import compat as tm_compat
+    from . import rekordbox_db as tm_rb
+
+    procs = tm_rb.running_rekordbox_processes()
+    if procs:
+        click.echo(
+            "❌ Rekordbox is running. Quit it before running with --all:", err=True
+        )
+        for p in procs:
+            click.echo(f"   • pid {p.pid}: {p.command}", err=True)
+        sys.exit(1)
+
+    try:
+        tracks = tm_rb.list_tracks(library_dir.resolve())
+    except ImportError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Could not open Rekordbox database: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(
+        f"🔍 Auditing {len(tracks)} Rekordbox track(s) for CDJ-2000NXS compatibility..."
+    )
+    click.echo()
+
+    results: list = []
+    missing = 0
+    for t in tracks:
+        path = t.folder_path
+        if not path.exists():
+            missing += 1
+            continue
+        results.append((path, tm_compat.classify(path)))
+
+    if missing:
+        click.echo(f"(Skipped {missing} track(s) whose file is missing on disk.)")
+        click.echo()
+    return results
 
 
 @cli.command("apply-metadata")
@@ -187,7 +313,9 @@ def apply_metadata(show: bool):
         apply_metadata_csv()
 
 
-def _collect_diff(user_map: Any, example_map: Any, removed: list, added: list, prefix: str = "") -> None:
+def _collect_diff(
+    user_map: Any, example_map: Any, removed: list, added: list, prefix: str = ""
+) -> None:
     """Compute which keys will be removed from / added to user_map relative to example_map."""
     for k in user_map:
         full = f"{prefix}.{k}" if prefix else k
@@ -274,9 +402,10 @@ def check_setup():
 
     # Check click
     try:
-        import click as _
+        from importlib.metadata import version as _pkg_version
 
-        click.echo(f"✅ click: {click.__version__}")
+        click_version = _pkg_version("click")
+        click.echo(f"✅ click: {click_version}")
     except ImportError:
         click.echo("❌ click: Not installed", err=True)
         click.echo("   Install: pip install click", err=True)
@@ -296,6 +425,7 @@ def check_setup():
     else:
         try:
             from ruamel.yaml import YAML as RuamelYAML
+
             ryaml = RuamelYAML()
             ryaml.preserve_quotes = True
             with open(config_path) as f:
@@ -305,6 +435,7 @@ def check_setup():
             use_ruamel = True
         except ImportError:
             import yaml
+
             with open(config_path) as f:
                 user_cfg = yaml.safe_load(f) or {}
             with open(example_path) as f:
@@ -337,15 +468,27 @@ def check_setup():
                     with open(config_path, "w") as f:
                         ryaml.dump(synced_cfg, f)
                 else:
-                    import yaml
                     import copy
+
+                    import yaml
+
                     synced_cfg = copy.deepcopy(example_cfg)
                     _overlay_user_values(synced_cfg, user_cfg)
                     with open(config_path, "w") as f:
-                        yaml.dump(synced_cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-                    click.echo("   Note: Comments were not preserved (ruamel.yaml not installed).")
+                        yaml.dump(
+                            synced_cfg,
+                            f,
+                            default_flow_style=False,
+                            allow_unicode=True,
+                            sort_keys=False,
+                        )
+                    click.echo(
+                        "   Note: Comments were not preserved (ruamel.yaml not installed)."
+                    )
                 click.echo("✅ config.yaml updated")
-                click.echo("   Re-run your install command to pick up any new dependencies:")
+                click.echo(
+                    "   Re-run your install command to pick up any new dependencies:"
+                )
                 click.echo(f"     pip install -e {config_path.parent}")
             else:
                 click.echo("Skipped config sync.")
@@ -358,7 +501,9 @@ def check_setup():
         click.echo("Next steps:")
         click.echo("  1. Ensure config.yaml is set up")
         click.echo("  2. Re-run your install command to pick up any new dependencies:")
-        click.echo(f"     pip install -e {config_path.parent}  (or however you installed it originally)")
+        click.echo(
+            f"     pip install -e {config_path.parent}  (or however you installed it originally)"
+        )
         click.echo("  3. Run: tm <url>")
 
     else:
@@ -377,7 +522,10 @@ def check_setup():
     help="Quality threshold in kbps — tracks below this are candidates (default: 256)",
 )
 @click.option(
-    "--output", "-o", type=click.Path(), help="Library directory to scan (overrides config)"
+    "--output",
+    "-o",
+    type=click.Path(),
+    help="Library directory to scan (overrides config)",
 )
 @click.option(
     "--dry-run",
@@ -429,8 +577,8 @@ def upgrade(
     If the upgraded file uses a different extension (e.g. mp3 → m4a) you will
     need to relocate the track in Rekordbox once — all cue points survive.
     """
-    from .upgrade import find_upgradeable_tracks, upgrade_track
     from .quality import format_bitrate
+    from .upgrade import find_upgradeable_tracks, upgrade_track
 
     config = Config()
     library_dir = Path(output) if output else config.output_dir
@@ -445,10 +593,13 @@ def upgrade(
         attempts_filter = 0
 
     filter_desc = (
-        "no attempt limit" if attempts_filter is None
-        else f"up to {attempts_filter} prior attempt(s)"
-        if attempts_filter > 0
-        else "never-attempted only"
+        "no attempt limit"
+        if attempts_filter is None
+        else (
+            f"up to {attempts_filter} prior attempt(s)"
+            if attempts_filter > 0
+            else "never-attempted only"
+        )
     )
     click.echo(
         f"🔍 Scanning {library_dir} for tracks below {threshold} kbps "
@@ -521,7 +672,11 @@ def upgrade(
                 continue
 
         success, msg = upgrade_track(
-            c["path"], c["track_url"], config, verbose=verbose, downloader=shared_downloader
+            c["path"],
+            c["track_url"],
+            config,
+            verbose=verbose,
+            downloader=shared_downloader,
         )
 
         if success:
@@ -538,9 +693,14 @@ def upgrade(
 
 @cli.command("migrate-to-aiff")
 @click.option(
-    "--output", "-o", type=click.Path(), help="Library directory to migrate (overrides config)"
+    "--output",
+    "-o",
+    type=click.Path(),
+    help="Library directory to migrate (overrides config)",
 )
-@click.option("--dry-run", "-n", is_flag=True, help="Show what would be migrated without doing it")
+@click.option(
+    "--dry-run", "-n", is_flag=True, help="Show what would be migrated without doing it"
+)
 @click.option(
     "--limit",
     "-l",
@@ -549,7 +709,9 @@ def upgrade(
     help="Migrate at most N files (useful for a small test run before going all-in)",
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt")
-def migrate_to_aiff(output: Optional[str], dry_run: bool, limit: Optional[int], yes: bool):
+def migrate_to_aiff(
+    output: Optional[str], dry_run: bool, limit: Optional[int], yes: bool
+):
     """Re-encode every non-AIFF file in the library to AIFF in place.
 
     Each original is moved to a hidden ``.tm-migration-backup/`` folder
@@ -584,7 +746,9 @@ def migrate_to_aiff(output: Optional[str], dry_run: bool, limit: Optional[int], 
         candidates = candidates[:limit]
 
     if not candidates:
-        click.echo("✅ Nothing to migrate (all files already AIFF or no audio files found).")
+        click.echo(
+            "✅ Nothing to migrate (all files already AIFF or no audio files found)."
+        )
         return
 
     current_total = sum(p.stat().st_size for p in candidates)
@@ -594,10 +758,16 @@ def migrate_to_aiff(output: Optional[str], dry_run: bool, limit: Optional[int], 
     delta_sign = "+" if delta >= 0 else "-"
 
     click.echo(f"Library: {library_dir}")
-    click.echo(f"Found {len(candidates)} non-AIFF file(s){' (limited)' if limit else ''}")
+    click.echo(
+        f"Found {len(candidates)} non-AIFF file(s){' (limited)' if limit else ''}"
+    )
     click.echo(f"  Current size:   {tm_migrate.fmt_size(current_total)}")
-    click.echo(f"  Projected AIFF: {tm_migrate.fmt_size(projected_total)} ({delta_sign}{tm_migrate.fmt_size(abs(delta))})")
-    click.echo(f"  Peak transient: {tm_migrate.fmt_size(peak)} (originals kept in .tm-migration-backup/ until you delete them)")
+    click.echo(
+        f"  Projected AIFF: {tm_migrate.fmt_size(projected_total)} ({delta_sign}{tm_migrate.fmt_size(abs(delta))})"
+    )
+    click.echo(
+        f"  Peak transient: {tm_migrate.fmt_size(peak)} (originals kept in .tm-migration-backup/ until you delete them)"
+    )
     click.echo()
 
     if dry_run:
@@ -625,7 +795,9 @@ def migrate_to_aiff(output: Optional[str], dry_run: bool, limit: Optional[int], 
         try:
             ok, msg = tm_migrate.migrate_one(p)
         except KeyboardInterrupt:
-            click.echo("\n⚠️ Interrupted by user — stopping. Already-migrated files are kept.")
+            click.echo(
+                "\n⚠️ Interrupted by user — stopping. Already-migrated files are kept."
+            )
             break
         except Exception as e:
             ok, msg = False, f"unexpected error: {e}"
@@ -653,9 +825,13 @@ def migrate_to_aiff(output: Optional[str], dry_run: bool, limit: Optional[int], 
     click.echo("Next steps for Rekordbox (CLOSE Rekordbox first):")
     click.echo("  1. Quit Rekordbox AND the rekordboxAgent helper process.")
     click.echo("  2. tm rekordbox-update-paths --dry-run    # preview the DB changes")
-    click.echo("  3. tm rekordbox-update-paths             # apply (creates a master.db backup)")
+    click.echo(
+        "  3. tm rekordbox-update-paths             # apply (creates a master.db backup)"
+    )
     click.echo("  4. Open Rekordbox; verify cue points + beat grids on a few tracks.")
-    click.echo(f"  5. Once verified, delete {library_dir / tm_migrate.BACKUP_DIRNAME} to reclaim disk.")
+    click.echo(
+        f"  5. Once verified, delete {library_dir / tm_migrate.BACKUP_DIRNAME} to reclaim disk."
+    )
 
 
 @cli.command("rekordbox-list")
@@ -665,10 +841,17 @@ def migrate_to_aiff(output: Optional[str], dry_run: bool, limit: Optional[int], 
     default=None,
     help="Library directory (default: from config). Tracks inside this dir are flagged.",
 )
-@click.option("--all", "show_all", is_flag=True,
-              help="Show extension breakdown for every track, not just library tracks")
-@click.option("--show-outside", is_flag=True,
-              help="Also list every track outside the library (sample of 20)")
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Show extension breakdown for every track, not just library tracks",
+)
+@click.option(
+    "--show-outside",
+    is_flag=True,
+    help="Also list every track outside the library (sample of 20)",
+)
 def rekordbox_list(library_dir: Optional[str], show_all: bool, show_outside: bool):
     """Read-only audit of Rekordbox's master.db.
 
@@ -737,11 +920,17 @@ def rekordbox_list(library_dir: Optional[str], show_all: bool, show_outside: boo
     default=None,
     help="Library directory (default: from config)",
 )
-@click.option("--dry-run", "-n", is_flag=True, help="Show what would change without writing")
-@click.option("--no-backup", is_flag=True,
-              help="Skip the master.db backup (NOT recommended)")
-@click.option("--kill-agent", is_flag=True,
-              help="Auto-kill rekordboxAgent if it's running (the GUI app must still be quit manually)")
+@click.option(
+    "--dry-run", "-n", is_flag=True, help="Show what would change without writing"
+)
+@click.option(
+    "--no-backup", is_flag=True, help="Skip the master.db backup (NOT recommended)"
+)
+@click.option(
+    "--kill-agent",
+    is_flag=True,
+    help="Auto-kill rekordboxAgent if it's running (the GUI app must still be quit manually)",
+)
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt")
 def rekordbox_update_paths(
     library_dir: Optional[str],
@@ -778,7 +967,16 @@ def rekordbox_update_paths(
     procs = tm_rb.running_rekordbox_processes()
     if procs:
         for p in procs:
-            tag = " (agent)" if p.is_agent else " (main app)" if "rekordbox 7" in p.command.lower() or "rekordbox.app" in p.command.lower() else ""
+            tag = (
+                " (agent)"
+                if p.is_agent
+                else (
+                    " (main app)"
+                    if "rekordbox 7" in p.command.lower()
+                    or "rekordbox.app" in p.command.lower()
+                    else ""
+                )
+            )
             click.echo(f"   • pid {p.pid}: {p.command}{tag}")
 
         agents = [p for p in procs if p.is_agent]
@@ -891,17 +1089,20 @@ def rekordbox_update_paths(
     click.echo()
     click.echo("Next steps:")
     click.echo("  1. Open Rekordbox.")
-    click.echo("  2. Spot-check a few tracks: cue points + beat grid intact, audio plays from .aiff.")
+    click.echo(
+        "  2. Spot-check a few tracks: cue points + beat grid intact, audio plays from .aiff."
+    )
     if result.backup_path:
         click.echo("  3. If anything looks wrong, restore the backup:")
-        click.echo(f"       cp \"{result.backup_path}\" \"{tm_rb.MASTER_DB_PATH}\"")
+        click.echo(f'       cp "{result.backup_path}" "{tm_rb.MASTER_DB_PATH}"')
         click.echo("     (Rekordbox must be closed when restoring.)")
 
 
 @cli.command("rekordbox-rewrite")
 @click.argument("input_xml", type=click.Path(exists=True, dir_okay=False))
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     type=click.Path(dir_okay=False),
     default=None,
     help="Output XML path (default: <input>.aiff.xml next to the input)",
@@ -912,8 +1113,15 @@ def rekordbox_update_paths(
     default=None,
     help="Library directory (default: from config)",
 )
-@click.option("--dry-run", "-n", is_flag=True, help="Show what would change without writing the output")
-def rekordbox_rewrite(input_xml: str, output: Optional[str], library_dir: Optional[str], dry_run: bool):
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would change without writing the output",
+)
+def rekordbox_rewrite(
+    input_xml: str, output: Optional[str], library_dir: Optional[str], dry_run: bool
+):
     """Rewrite a Rekordbox XML export so each <TRACK> points at its migrated AIFF.
 
     Run this AFTER ``tm migrate-to-aiff``. Cue points, beat grids, loops,
@@ -954,6 +1162,7 @@ def rekordbox_rewrite(input_xml: str, output: Optional[str], library_dir: Option
 
     if dry_run:
         import tempfile
+
         # Run the rewriter against a throwaway path so we get an accurate
         # picture of what would happen, including AIFF probe results.
         with tempfile.NamedTemporaryFile(suffix=".xml", delete=True) as tmp:
@@ -990,24 +1199,28 @@ def rekordbox_rewrite(input_xml: str, output: Optional[str], library_dir: Option
         click.echo("  1. File → Library → Import Library…")
         click.echo(f"  2. Select: {output_path}")
         click.echo("  3. Confirm the import dialog.")
-        click.echo("  4. Verify a few tracks: cue points + beat grid intact, audio plays.")
+        click.echo(
+            "  4. Verify a few tracks: cue points + beat grid intact, audio plays."
+        )
 
 
 @cli.command("rate-stats")
 def rate_stats():
     """Show API rate limit statistics."""
     from .rate_limiter import get_rate_limit_stats
-    
+
     click.echo("📊 API Rate Limit Statistics")
     click.echo()
-    
+
     stats = get_rate_limit_stats()
-    
+
     for service, data in stats.items():
-        service_name = service.replace('_', ' ').title()
+        service_name = service.replace("_", " ").title()
         click.echo(f"🔹 {service_name}:")
         click.echo(f"   Calls (last minute): {data['calls_last_minute']}")
-        click.echo(f"   Tokens available: {data['tokens_available']}/{data['burst_size']}")
+        click.echo(
+            f"   Tokens available: {data['tokens_available']}/{data['burst_size']}"
+        )
         click.echo(f"   Rate limit: {data['rate']:.2f} calls/sec")
         click.echo()
 
@@ -1016,7 +1229,7 @@ def rate_stats():
 @click.argument("file", type=click.Path(exists=True))
 def show_metadata(file: str):
     """Show all metadata for a track.
-    
+
     Displays comprehensive metadata including:
     - File information (format, size)
     - Audio properties (duration, bitrate, sample rate)
