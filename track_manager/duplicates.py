@@ -12,11 +12,18 @@ from mutagen.mp4 import MP4
 # freeform atoms (TRACK_URL, ISRC) only exist on .m4a, but ID3 frames
 # (TSRC) exist on .mp3 and .aiff alike.
 _AUDIO_GLOBS = (
-    "*.m4a", "*.M4A",
-    "*.mp3", "*.MP3",
-    "*.aiff", "*.AIFF", "*.aif", "*.AIF",
-    "*.flac", "*.FLAC",
-    "*.wav", "*.WAV",
+    "*.m4a",
+    "*.M4A",
+    "*.mp3",
+    "*.MP3",
+    "*.aiff",
+    "*.AIFF",
+    "*.aif",
+    "*.AIF",
+    "*.flac",
+    "*.FLAC",
+    "*.wav",
+    "*.WAV",
 )
 _M4A_GLOBS = ("*.m4a", "*.M4A")
 _ID3_GLOBS = ("*.mp3", "*.MP3", "*.aiff", "*.AIFF", "*.aif", "*.AIF")
@@ -177,7 +184,7 @@ def find_duplicates_by_track_url(track_url: str, library_dir: Path) -> List[Path
     duplicates = []
 
     # Normalize URL for comparison (remove trailing slashes, query params)
-    normalized_url = track_url.rstrip('/').split('?')[0].lower()
+    normalized_url = track_url.rstrip("/").split("?")[0].lower()
 
     # M4A files store track URL as a freeform iTunes atom.
     for pattern in _M4A_GLOBS:
@@ -189,7 +196,7 @@ def find_duplicates_by_track_url(track_url: str, library_dir: Path) -> List[Path
                 url_tags = audio.get("----:com.apple.iTunes:TRACK_URL")
                 if url_tags:
                     file_url = url_tags[0].decode("utf-8")
-                    file_url_normalized = file_url.rstrip('/').split('?')[0].lower()
+                    file_url_normalized = file_url.rstrip("/").split("?")[0].lower()
                     if file_url_normalized == normalized_url:
                         duplicates.append(file_path)
             except Exception:
@@ -200,11 +207,12 @@ def find_duplicates_by_track_url(track_url: str, library_dir: Path) -> List[Path
         for file_path in library_dir.glob(pattern):
             try:
                 from mutagen.id3 import ID3
+
                 audio = ID3(str(file_path))
                 for frame in audio.getall("TXXX"):
                     if frame.desc == "TRACK_URL" and frame.text:
                         file_url = str(frame.text[0])
-                        file_url_normalized = file_url.rstrip('/').split('?')[0].lower()
+                        file_url_normalized = file_url.rstrip("/").split("?")[0].lower()
                         if file_url_normalized == normalized_url:
                             duplicates.append(file_path)
                             break
@@ -249,6 +257,7 @@ def find_duplicates_by_isrc(isrc: str, library_dir: Path) -> List[Path]:
         for file_path in library_dir.glob(pattern):
             try:
                 from mutagen.id3 import ID3
+
                 audio = ID3(str(file_path))
                 if not audio:
                     continue
@@ -293,6 +302,80 @@ def find_duplicates(artist: str, title: str, library_dir: Path) -> List[Path]:
     return duplicates
 
 
+def handle_duplicates(
+    duplicates: List[Path],
+    handling: str,
+    *,
+    artist: Optional[str] = None,
+    title: Optional[str] = None,
+    new_file_name: Optional[str] = None,
+) -> bool:
+    """Apply the configured handling mode to already-found duplicates.
+
+    This is the single source of truth for interpreting the
+    ``duplicates.handling`` config mode (interactive / skip / keep). Callers
+    are responsible for *finding* the duplicates (by URL, ISRC, or metadata);
+    this function only *decides* what to do, and in interactive "replace" mode
+    removes the existing files.
+
+    Args:
+        duplicates: Existing files considered duplicates of the new track.
+        handling: Handling mode ("interactive", "skip", or "keep").
+        artist: Artist of the new track (for display).
+        title: Title of the new track (for display).
+        new_file_name: Name of the new file, when known (for display).
+
+    Returns:
+        True if the new track should be skipped (existing kept),
+        False if the new track should be kept.
+    """
+    if not duplicates:
+        return False
+
+    if handling == "skip":
+        label = (
+            f"{artist} - {title}" if artist and title else (new_file_name or "track")
+        )
+        print(f"⏭️ Skipped (already in library): {label}")
+        return True
+
+    if handling == "keep":
+        return False
+
+    # interactive
+    print("\n⚠️ Duplicate track detected!")
+    if new_file_name:
+        print(f"New file: {new_file_name}")
+    if artist:
+        print(f"  Artist: {artist}")
+    if title:
+        print(f"  Title: {title}")
+    print("\nExisting files:")
+    for i, dup in enumerate(duplicates, 1):
+        print(f"  {i}. {dup.name}")
+
+    print("\nWhat would you like to do?")
+    print("  [s] Skip new file (keep existing)")
+    print("  [k] Keep both")
+    print("  [r] Replace existing with new file", flush=True)
+
+    while True:
+        choice = input("Choice [s/k/r]: ").lower().strip()
+
+        if choice == "s":
+            return True  # Skip new file
+        elif choice == "k":
+            return False  # Keep both
+        elif choice == "r":
+            # Remove existing files
+            for dup in duplicates:
+                print(f"Removing: {dup.name}")
+                dup.unlink()
+            return False  # Keep new file
+        else:
+            print("Invalid choice. Please enter s, k, or r.")
+
+
 def check_file_duplicate(file_path: Path, library_dir: Path, handling: str) -> bool:
     """Check if file is a duplicate.
 
@@ -314,49 +397,13 @@ def check_file_duplicate(file_path: Path, library_dir: Path, handling: str) -> b
     # Remove the file itself from duplicates list
     duplicates = [d for d in duplicates if d.resolve() != file_path.resolve()]
 
-    if not duplicates:
-        return False
-
-    # Handle based on mode
-    if handling == "skip":
-        print(f"⚠️ Duplicate found: {file_path.name}")
-        return True
-
-    elif handling == "keep":
-        return False
-
-    else:  # interactive
-        print(f"\n⚠️ Duplicate track detected!")
-        print(f"New file: {file_path.name}")
-        print(f"  Artist: {artist}")
-        print(f"  Title: {title}")
-        print(f"\nExisting files:")
-        for i, dup in enumerate(duplicates, 1):
-            dup_artist, dup_title = extract_metadata(dup)
-            print(f"  {i}. {dup.name}")
-            print(f"     Artist: {dup_artist}")
-            print(f"     Title: {dup_title}")
-
-        print(f"\nWhat would you like to do?")
-        print(f"  [s] Skip new file (keep existing)")
-        print(f"  [k] Keep both")
-        print(f"  [r] Replace existing with new file", flush=True)
-
-        while True:
-            choice = input("Choice [s/k/r]: ").lower().strip()
-
-            if choice == "s":
-                return True  # Skip new file
-            elif choice == "k":
-                return False  # Keep both
-            elif choice == "r":
-                # Remove existing files
-                for dup in duplicates:
-                    print(f"Removing: {dup.name}")
-                    dup.unlink()
-                return False  # Keep new file
-            else:
-                print("Invalid choice. Please enter s, k, or r.")
+    return handle_duplicates(
+        duplicates,
+        handling,
+        artist=artist,
+        title=title,
+        new_file_name=file_path.name,
+    )
 
 
 def scan_library(library_dir: Path) -> dict:

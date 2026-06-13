@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from . import __version__
 from . import audio as tm_audio
@@ -13,12 +13,29 @@ from . import blob as tm_blob
 from . import pipeline as tm_pipeline
 from .config import Config
 from .metadata import sanitize_filename
+from .rate_limiter import dab_rate_limit, spotify_rate_limit
 from .songlink import SongLinkClient
 from .sources import direct, soundcloud, spotify, youtube
-from .rate_limiter import spotify_rate_limit, dab_rate_limit
 
+_TRACKING_PARAMS = {
+    "si",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+}
 
-_TRACKING_PARAMS = {"si", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"}
+# Smart-download dedup/upgrade tuning.
+# Source codecs we treat as lossless: once we already own one of these for a
+# track, the smart-download path can't do better, so we never re-fetch it.
+_LOSSLESS_SOURCE_FORMATS = {"flac", "alac", "aiff", "aif", "wav", "ape", "wv"}
+
+# How many times the smart-download path will auto-attempt to upgrade an owned
+# *lossy* copy before giving up. Tracks that these sources only ever serve in
+# low quality (e.g. YouTube-only uploads) would otherwise be retried forever.
+# Reuses the same per-file counter as `tm upgrade` (provenance.upgrade_attempts).
+_SMART_UPGRADE_MAX_ATTEMPTS = 2
 
 
 def _strip_tracking_params(url: str) -> str:
@@ -73,26 +90,28 @@ class Downloader:
             # Reuse the existing handler but point it at the current output dir.
             self._spotify_handler.output_dir = self.output_dir
             # Also update spotdl's internal downloader so it writes to the right place.
-            self._spotify_handler.spotdl.downloader.settings["output"] = str(self.output_dir)
+            self._spotify_handler.spotdl.downloader.settings["output"] = str(
+                self.output_dir
+            )
 
         return self._spotify_handler
 
     def _has_spotify_credentials(self) -> bool:
         """Check if Spotify API credentials are available.
-        
+
         Returns:
             True if both client_id and client_secret are configured
         """
         import os
-        
+
         client_id = os.getenv("SPOTIPY_CLIENT_ID", "")
         client_secret = os.getenv("SPOTIPY_CLIENT_SECRET", "")
-        
+
         if not client_id:
             client_id = self.config.get("spotdl.client_id", "")
         if not client_secret:
             client_secret = self.config.get("spotdl.client_secret", "")
-        
+
         return bool(client_id and client_secret)
 
     def _extract_spotify_id(self, url: str) -> Optional[str]:
@@ -282,7 +301,9 @@ class Downloader:
 
             if self._dab_client is None:
                 print("🔐 Logging in to DAB Music...")
-                self._dab_client = DABMusicClient(email, password, self.config.dabmusic_endpoint)
+                self._dab_client = DABMusicClient(
+                    email, password, self.config.dabmusic_endpoint
+                )
 
             print("🎵 Searching DAB Music...")
             client = self._dab_client
@@ -317,7 +338,9 @@ class Downloader:
             if final_path is None:
                 return False
 
-            print(f"✅ Downloaded and saved as {final_path.suffix.upper()[1:]}: {final_path}")
+            print(
+                f"✅ Downloaded and saved as {final_path.suffix.upper()[1:]}: {final_path}"
+            )
             print()
             return True
 
@@ -367,7 +390,9 @@ class Downloader:
                     print("ℹ️ Could not get track info from TIDAL")
                     return False
 
-                print(f"✅ Found on TIDAL: {track['title']} by {track['artist']['name']}")
+                print(
+                    f"✅ Found on TIDAL: {track['title']} by {track['artist']['name']}"
+                )
 
             # The TIDAL public endpoint historically promised FLAC for
             # quality=LOSSLESS, but at present it tends to serve AAC HIGH
@@ -449,9 +474,9 @@ class Downloader:
                 doc["track"]["artists"] = artists
                 doc["track"]["artist_string"] = ", ".join(artists)
             doc["track"]["title"] = spotify_metadata.get("title") or track.get("title")
-            doc["track"]["album"] = (
-                spotify_metadata.get("album") or track.get("album", {}).get("title")
-            )
+            doc["track"]["album"] = spotify_metadata.get("album") or track.get(
+                "album", {}
+            ).get("title")
         if not doc["track"]["title"]:
             doc["track"]["title"] = track.get("title")
         if not doc["track"]["artists"]:
@@ -487,9 +512,9 @@ class Downloader:
 
         if track.get("album", {}).get("cover"):
             cover_path = track["album"]["cover"].replace("-", "/")
-            doc["cover_art"]["url"] = (
-                f"https://resources.tidal.com/images/{cover_path}/1280x1280.jpg"
-            )
+            doc["cover_art"][
+                "url"
+            ] = f"https://resources.tidal.com/images/{cover_path}/1280x1280.jpg"
 
         doc["provenance"]["track_url"] = track_url
         doc["provenance"]["playlist_url"] = playlist_url
@@ -526,13 +551,10 @@ class Downloader:
             if artists:
                 doc["track"]["artists"] = artists
                 doc["track"]["artist_string"] = ", ".join(artists)
-            doc["track"]["title"] = (
-                spotify_metadata.get("title") or track.get("title")
-            )
-            doc["track"]["album"] = (
-                spotify_metadata.get("album")
-                or (track.get("album") or {}).get("title")
-            )
+            doc["track"]["title"] = spotify_metadata.get("title") or track.get("title")
+            doc["track"]["album"] = spotify_metadata.get("album") or (
+                track.get("album") or {}
+            ).get("title")
         if not doc["track"]["title"]:
             doc["track"]["title"] = track.get("title")
         if not doc["track"]["artists"]:
@@ -548,9 +570,11 @@ class Downloader:
         released_at = album.get("released_at")
         if released_at:
             try:
-                doc["track"]["date"] = datetime.fromtimestamp(
-                    released_at, tz=timezone.utc
-                ).date().isoformat()
+                doc["track"]["date"] = (
+                    datetime.fromtimestamp(released_at, tz=timezone.utc)
+                    .date()
+                    .isoformat()
+                )
             except (OSError, ValueError, OverflowError):
                 pass
         doc["track"]["isrc"] = isrc
@@ -605,7 +629,9 @@ class Downloader:
                 doc["track"]["artists"] = artists
                 doc["track"]["artist_string"] = ", ".join(artists)
             doc["track"]["title"] = spotify_metadata.get("title") or track.get("title")
-            doc["track"]["album"] = spotify_metadata.get("album") or track.get("albumTitle")
+            doc["track"]["album"] = spotify_metadata.get("album") or track.get(
+                "albumTitle"
+            )
         if not doc["track"]["title"]:
             doc["track"]["title"] = track.get("title")
         if not doc["track"]["artists"]:
@@ -671,20 +697,20 @@ class Downloader:
 
         Returns:
             Source type: 'spotify', 'youtube', 'soundcloud', or 'direct'
-        
+
         Raises:
             ValueError: If URL is invalid or not supported
         """
         parsed = urlparse(url)
-        
+
         # Validate URL has proper scheme
-        if not parsed.scheme or parsed.scheme not in ['http', 'https']:
+        if not parsed.scheme or parsed.scheme not in ["http", "https"]:
             raise ValueError(
                 f"Invalid URL: '{url}'\n"
                 "URLs must start with http:// or https://\n"
                 "Run 'track-manager --help' for usage examples"
             )
-        
+
         # Validate URL has domain
         if not parsed.netloc:
             raise ValueError(
@@ -692,7 +718,7 @@ class Downloader:
                 "URL must include a domain name\n"
                 "Run 'track-manager --help' for usage examples"
             )
-        
+
         domain = parsed.netloc.lower()
 
         if "spotify.com" in domain:
@@ -704,8 +730,17 @@ class Downloader:
         else:
             # Check if it looks like a direct audio file URL
             parsed_path = parsed.path.lower()
-            audio_extensions = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac', '.opus', '.wma']
-            
+            audio_extensions = [
+                ".mp3",
+                ".m4a",
+                ".flac",
+                ".wav",
+                ".ogg",
+                ".aac",
+                ".opus",
+                ".wma",
+            ]
+
             if any(parsed_path.endswith(ext) for ext in audio_extensions):
                 return "direct"
             else:
@@ -720,6 +755,7 @@ class Downloader:
         isrc: Optional[str] = None,
         spotify_metadata: Optional[dict] = None,
         playlist_url: Optional[str] = None,
+        check_duplicates: bool = False,
     ) -> bool:
         """Try to download via the smart-download chain (Qobuz → TIDAL).
 
@@ -729,6 +765,13 @@ class Downloader:
             isrc: Pre-fetched ISRC (optional)
             spotify_metadata: Pre-fetched Spotify metadata (optional)
             playlist_url: Playlist URL if downloading from a playlist
+            check_duplicates: When True, look for an existing copy in the
+                library *before* downloading. If we already own a lossless
+                copy the configured ``duplicates.handling`` mode applies; if we
+                own only a lossy copy, an in-place upgrade is attempted (capped
+                by ``_SMART_UPGRADE_MAX_ATTEMPTS``). Callers that run their own
+                pre-download dedup (e.g. SpotifyDownloader) leave this False to
+                avoid double-checking.
 
         Returns:
             True if downloaded successfully, False if caller should fall back.
@@ -757,6 +800,17 @@ class Downloader:
         if not isrc:
             isrc, tidal_track = self._resolve_isrc_via_tidal(url)
 
+        # Quality-aware dedup: now that the ISRC is resolved (the strongest
+        # cross-source identity), see if we already own this track and can
+        # skip the download or turn it into an in-place upgrade instead.
+        # This only ever runs on the smart-download path — `--dumb` (self.dumb)
+        # returns above, so the in-place upgrade never fires for direct/dumb
+        # downloads.
+        if check_duplicates:
+            handled = self._dedup_or_upgrade(url, isrc, spotify_metadata)
+            if handled:
+                return True
+
         # Smart-download chain (lossless first):
         #   1) Qobuz public proxy — true 16/44.1 FLAC, requires ISRC.
         #      Fast and reliable as long as kennyy.com.br is up.
@@ -780,9 +834,115 @@ class Downloader:
             prefetched_track=tidal_track,
         )
 
-    def _resolve_isrc_via_tidal(
-        self, url: str
-    ) -> tuple[Optional[str], Optional[dict]]:
+    def _find_owned_copy(self, url: str, isrc: Optional[str]) -> Optional[Path]:
+        """Return an existing library file for this track, or None.
+
+        Uses strong identity only — ISRC first, then the stored TRACK_URL — so
+        an in-place upgrade can never replace a *different* recording (e.g. a
+        live or remix variant) that merely shares an artist/title.
+        """
+        from .duplicates import find_duplicates_by_isrc, find_duplicates_by_track_url
+
+        if isrc:
+            matches = find_duplicates_by_isrc(isrc, self.output_dir)
+            if matches:
+                return matches[0]
+        if url:
+            matches = find_duplicates_by_track_url(url, self.output_dir)
+            if matches:
+                return matches[0]
+        return None
+
+    @staticmethod
+    def _is_lossless_source(source_quality: dict) -> bool:
+        """True if the owned file's *source* codec is lossless."""
+        fmt = (source_quality.get("format") or "").lower()
+        if not fmt:
+            return False
+        return fmt.startswith("pcm") or fmt in _LOSSLESS_SOURCE_FORMATS
+
+    @staticmethod
+    def _describe_source(source_quality: dict) -> str:
+        """Human-readable 'aac 128k' / 'flac' summary for messaging."""
+        fmt = source_quality.get("format") or "unknown"
+        bitrate = source_quality.get("bitrate_kbps")
+        return f"{fmt} {bitrate}k" if bitrate else str(fmt)
+
+    def _dedup_or_upgrade(
+        self,
+        url: str,
+        isrc: Optional[str],
+        spotify_metadata: Optional[dict],
+    ) -> Optional[bool]:
+        """Quality-aware pre-download dedup for the smart-download path.
+
+        Looks for an existing copy of the track (by ISRC, then TRACK_URL)
+        before spending a download:
+
+          * Already own a *lossless* copy → defer to ``duplicates.handling``
+            (skip / keep / interactive).
+          * Own only a *lossy* copy → attempt an in-place upgrade, capped at
+            ``_SMART_UPGRADE_MAX_ATTEMPTS`` so tracks these sources only ever
+            serve in low quality aren't retried forever.
+          * Don't own it → return None so the caller downloads normally.
+
+        Returns:
+            True if handled (existing kept, or upgraded in place); the caller
+            should treat the smart download as done. None to proceed with a
+            fresh download.
+        """
+        from . import duplicates as tm_dup
+        from . import upgrade as tm_upgrade
+
+        owned = self._find_owned_copy(url, isrc)
+        if owned is None:
+            return None
+
+        src = tm_upgrade._source_quality(owned)
+        artist, title = tm_dup.extract_metadata(owned)
+
+        if self._is_lossless_source(src):
+            # Already lossless — the smart path can't improve on it, so this is
+            # a pure duplicate. Defer the decision to the configured mode.
+            skip = tm_dup.handle_duplicates(
+                [owned],
+                self.config.duplicate_handling,
+                artist=artist,
+                title=title,
+            )
+            return True if skip else None
+
+        attempts = tm_upgrade._read_upgrade_attempts(owned)
+        if attempts >= _SMART_UPGRADE_MAX_ATTEMPTS:
+            print(
+                f"⏭️ Skipped: already own {self._describe_source(src)} and "
+                f"{attempts} upgrade attempt(s) already made → {owned.name}"
+            )
+            return True
+
+        # Own a lossy copy under the attempt cap → try to upgrade it in place
+        # (preserves filename so Rekordbox cue points survive). upgrade_track
+        # bumps the attempt counter and only replaces if the new file is
+        # genuinely better, so a failed attempt still counts toward the cap.
+        print(
+            f"⬆️ Already own a lossy copy ({self._describe_source(src)}); "
+            f"attempting upgrade → {owned.name}"
+        )
+        saved_output_dir = self.output_dir
+        try:
+            ok, msg = tm_upgrade.upgrade_track(owned, url, self.config, downloader=self)
+        finally:
+            # upgrade_track points us at a temp dir for the re-download; restore
+            # the real library dir for any subsequent work on this Downloader.
+            self.output_dir = saved_output_dir
+
+        if ok:
+            print(f"⬆️ Upgraded: {msg}")
+        else:
+            print(f"⏭️ Kept existing copy ({msg})")
+        return True
+
+    def _resolve_isrc_via_tidal(self, url: str) -> tuple[Optional[str], Optional[dict]]:
         """Discover a track's ISRC by looking it up on TIDAL via song.link.
 
         Returns `(isrc, track_info)`. Either may be None if the lookup
@@ -844,17 +1004,35 @@ class Downloader:
             if not self._has_spotify_credentials():
                 # Determine if it's a playlist/album or single track
                 is_playlist = "/playlist/" in url or "/album/" in url
-                
+
                 if is_playlist:
-                    print("❌ Spotify playlists/albums require API credentials", file=sys.stderr)
-                    print("\n📝 Spotify API credentials are optional but needed for playlists:", file=sys.stderr)
-                    print("   • Individual Spotify tracks work without credentials (via TIDAL)", file=sys.stderr)
-                    print("   • Playlists/albums require Spotify API setup\n", file=sys.stderr)
+                    print(
+                        "❌ Spotify playlists/albums require API credentials",
+                        file=sys.stderr,
+                    )
+                    print(
+                        "\n📝 Spotify API credentials are optional but needed for playlists:",
+                        file=sys.stderr,
+                    )
+                    print(
+                        "   • Individual Spotify tracks work without credentials (via TIDAL)",
+                        file=sys.stderr,
+                    )
+                    print(
+                        "   • Playlists/albums require Spotify API setup\n",
+                        file=sys.stderr,
+                    )
                     print("🔧 To enable Spotify playlist support:", file=sys.stderr)
-                    print("   1. Get credentials from: https://developer.spotify.com/dashboard", file=sys.stderr)
+                    print(
+                        "   1. Get credentials from: https://developer.spotify.com/dashboard",
+                        file=sys.stderr,
+                    )
                     print("   2. Set environment variables:", file=sys.stderr)
                     print("      export SPOTIPY_CLIENT_ID='your_id'", file=sys.stderr)
-                    print("      export SPOTIPY_CLIENT_SECRET='your_secret'", file=sys.stderr)
+                    print(
+                        "      export SPOTIPY_CLIENT_SECRET='your_secret'",
+                        file=sys.stderr,
+                    )
                     print("   3. Or add to config.yaml:", file=sys.stderr)
                     print("      spotdl:", file=sys.stderr)
                     print("        client_id: 'your_id'", file=sys.stderr)
@@ -866,34 +1044,48 @@ class Downloader:
                     print("ℹ️ Spotify API not configured, downloading via TIDAL")
                     print("   (For playlist support, add Spotify API credentials)")
                     print()
-                    
+
                     # Try smart download directly (bypasses Spotify handler)
-                    success = self.try_smart_download(url, format)
+                    success = self.try_smart_download(
+                        url, format, check_duplicates=True
+                    )
                     if success:
                         return True
                     else:
                         print("❌ Failed to download via TIDAL", file=sys.stderr)
-                        print("   Spotify API credentials needed for this track", file=sys.stderr)
-                        self._log_failure(url, "TIDAL download failed, Spotify API needed")
+                        print(
+                            "   Spotify API credentials needed for this track",
+                            file=sys.stderr,
+                        )
+                        self._log_failure(
+                            url, "TIDAL download failed, Spotify API needed"
+                        )
                         return False
-            
+
             # If we get here, we have Spotify credentials
             handler = self._get_spotify_handler()
         elif source_type == "youtube":
             handler = youtube.YouTubeDownloader(self.config, self.output_dir, self)
         elif source_type == "soundcloud":
-            handler = soundcloud.SoundCloudDownloader(self.config, self.output_dir, self)
+            handler = soundcloud.SoundCloudDownloader(
+                self.config, self.output_dir, self
+            )
         elif source_type == "unknown":
             # Unrecognized platform (Apple Music, Deezer, etc.)
             # Try smart download via song.link → TIDAL
             print("🔍 Unknown platform, attempting smart download via TIDAL...")
             print()
-            success = self.try_smart_download(url, format)
+            success = self.try_smart_download(url, format, check_duplicates=True)
             if success:
                 return True  # Success, we're done
             else:
-                print("❌ Platform not recognized and not found on TIDAL", file=sys.stderr)
-                print("   Supported: Spotify, YouTube, SoundCloud, or direct audio URLs", file=sys.stderr)
+                print(
+                    "❌ Platform not recognized and not found on TIDAL", file=sys.stderr
+                )
+                print(
+                    "   Supported: Spotify, YouTube, SoundCloud, or direct audio URLs",
+                    file=sys.stderr,
+                )
                 self._log_failure(url, "Unknown platform, not available via TIDAL")
                 return False  # Don't create garbage files
         elif source_type == "direct":

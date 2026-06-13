@@ -137,13 +137,14 @@ class SpotifyDownloader(BaseDownloader):
             # Get songs from URL
             # Apply rate limiting before fetching playlist
             from ..rate_limiter import spotify_rate_limit
+
             spotify_rate_limit()
 
             try:
                 songs = self.spotdl.search([url])
             except KeyError as e:
                 if "genres" in str(e):
-                    """ print(
+                    """print(
                         "⚠️  spotdl failed: artist has no 'genres' in Spotify API response.",
                         file=sys.stderr,
                     )
@@ -151,12 +152,10 @@ class SpotifyDownloader(BaseDownloader):
                         "   This is a known spotdl bug (spotdl/types/artist.py#104).",
                         file=sys.stderr,
                     )
-                    print() """
+                    print()"""
                     if self.parent_downloader:
                         print("🔄 Falling back to TIDAL download...")
-                        success = self.parent_downloader.try_smart_download(
-                            url, format
-                        )
+                        success = self.parent_downloader.try_smart_download(url, format)
                         if success:
                             return
                         print("❌ TIDAL fallback also failed.", file=sys.stderr)
@@ -171,7 +170,7 @@ class SpotifyDownloader(BaseDownloader):
             track_count = len(songs)
             print(f"✅ Found {track_count} tracks")
             print()
-            
+
             # Determine if this is a playlist/album (multiple tracks)
             playlist_url = url if track_count > 1 else None
 
@@ -194,14 +193,18 @@ class SpotifyDownloader(BaseDownloader):
                 print(f"[{idx}/{track_count}] {song.artist} - {song.name}")
 
                 try:
-                    # Check for duplicates BEFORE downloading
+                    # Check for duplicates BEFORE downloading. Respect the
+                    # configured duplicates.handling mode (interactive / skip /
+                    # keep) via the shared decision logic, rather than always
+                    # hard-skipping.
                     existing_duplicates = self._check_existing_duplicates(
                         song, audio_format
                     )
-                    if existing_duplicates:
-                        print(
-                            f"⏭️ Skipped: Already exists at {existing_duplicates[0].name}"
-                        )
+                    if existing_duplicates and self.handle_found_duplicates(
+                        existing_duplicates,
+                        artist=song.artist,
+                        title=song.name,
+                    ):
                         continue
 
                     # Try smart download if parent downloader available
@@ -211,7 +214,7 @@ class SpotifyDownloader(BaseDownloader):
                             "title": song.name,
                             "album": song.album_name,
                         }
-                        
+
                         smart_success = self.parent_downloader.try_smart_download(
                             song.url,
                             format,
@@ -219,7 +222,7 @@ class SpotifyDownloader(BaseDownloader):
                             spotify_metadata=spotify_metadata,
                             playlist_url=playlist_url,
                         )
-                        
+
                         if smart_success:
                             success += 1
                             continue
@@ -236,7 +239,9 @@ class SpotifyDownloader(BaseDownloader):
                         # intermediate format set in DownloaderOptions, i.e.
                         # m4a). Pass `result` so we use spotdl's returned
                         # path directly without a redundant re-download.
-                        file_path = self._find_downloaded_file(song, audio_format, spotdl_result=result)
+                        file_path = self._find_downloaded_file(
+                            song, audio_format, spotdl_result=result
+                        )
 
                         # spotdl re-encodes its YouTube download to AAC@192
                         # before handing it back, so probing the on-disk file
@@ -244,8 +249,8 @@ class SpotifyDownloader(BaseDownloader):
                         # yt-dlp directly about the upstream stream so the
                         # blob carries the real source codec/bitrate (~128
                         # for fmt 140, ~160 for fmt 251).
-                        upstream_codec, upstream_kbps = self._probe_upstream_youtube_source(
-                            song
+                        upstream_codec, upstream_kbps = (
+                            self._probe_upstream_youtube_source(song)
                         )
 
                         if file_path and self._process_download(
@@ -261,7 +266,9 @@ class SpotifyDownloader(BaseDownloader):
                             # Log the failure when file is not found or processing fails
                             if not file_path:
                                 print("⚠️ Download failed: file not found")
-                                self.log_failure(song.url, "spotdl completed but file not found")
+                                self.log_failure(
+                                    song.url, "spotdl completed but file not found"
+                                )
                             else:
                                 print("⚠️ Download failed: processing error")
                                 self.log_failure(song.url, "File processing failed")
@@ -407,7 +414,11 @@ class SpotifyDownloader(BaseDownloader):
         Returns:
             List of existing duplicate file paths, empty if no duplicates
         """
-        from ..duplicates import find_duplicates, find_duplicates_by_isrc, find_duplicates_by_track_url
+        from ..duplicates import (
+            find_duplicates,
+            find_duplicates_by_isrc,
+            find_duplicates_by_track_url,
+        )
 
         # Priority 1: Check by track URL (most comprehensive)
         if song.url:
@@ -486,7 +497,7 @@ class SpotifyDownloader(BaseDownloader):
         abr = info.get("abr")
         if abr in (None, 0):
             # Some yt-dlp versions only fill abr on entries inside `formats`.
-            for fmt in (info.get("formats") or []):
+            for fmt in info.get("formats") or []:
                 if fmt.get("format_id") == info.get("format_id") and fmt.get("abr"):
                     abr = fmt["abr"]
                     if not codec or codec == "none":
@@ -504,20 +515,20 @@ class SpotifyDownloader(BaseDownloader):
         self, song: Song, format: str, playlist_url: Optional[str] = None
     ) -> bool:
         """Download from YouTube using yt-dlp directly.
-        
+
         This ensures we get format 251 (Opus ~160kbps, 20kHz) and convert to M4A
         instead of getting format 140 (native M4A ~128kbps, 16kHz).
-        
+
         Args:
             song: Song object with download_url
             format: Audio format (m4a or mp3)
             playlist_url: Optional playlist URL
-            
+
         Returns:
             True if successful
         """
         import yt_dlp
-        
+
         ydl_opts = {
             "format": "251/140/bestaudio/best",
             "writethumbnail": True,
@@ -529,7 +540,7 @@ class SpotifyDownloader(BaseDownloader):
                 },
                 {
                     "key": "EmbedThumbnail",
-                }
+                },
             ],
             "outtmpl": str(self.output_dir / ".tmp_%(id)s.%(ext)s"),
             "quiet": True,
@@ -537,42 +548,42 @@ class SpotifyDownloader(BaseDownloader):
             "extract_flat": False,
             "remote_components": ["ejs:github"],
         }
-        
+
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(song.download_url, download=True)
-                
+
                 # Find the downloaded file
                 video_id = info.get("id")
                 temp_file = None
-                
+
                 for ext in [format, "m4a", "mp3", "opus", "webm"]:
                     potential_file = self.output_dir / f".tmp_{video_id}.{ext}"
                     if potential_file.exists():
                         temp_file = potential_file
                         break
-                
+
                 if not temp_file or not temp_file.exists():
                     print(f"⚠️ Downloaded file not found")
                     return False
-                
+
                 # Use Spotify metadata (more reliable than YouTube)
                 artist = song.artist
                 title = song.name
-                
+
                 # Create final filename
                 final_name = self.create_filename(artist, title, format)
                 final_path = self.output_dir / final_name
-                
+
                 # Check for duplicates
                 if self.check_duplicate(temp_file):
                     temp_file.unlink()
                     print("⏭️ Skipped (duplicate)")
                     return True
-                
+
                 # Move to final location
                 temp_file.rename(final_path)
-                
+
                 # ORIGINAL_BITRATE = source stream bitrate (what YouTube
                 # delivered), not our re-encoded output.  yt-dlp reports this
                 # as "abr" (average bitrate of the selected format).
@@ -590,10 +601,10 @@ class SpotifyDownloader(BaseDownloader):
                     playlist_url,
                     isrc=song.isrc,
                 )
-                
+
                 print(f"✅ Saved: {final_name}")
                 return True
-                
+
         except Exception as e:
             print(f"⚠️ Download failed: {e}", file=sys.stderr)
             self.log_failure(song.download_url, str(e))
@@ -702,7 +713,9 @@ class SpotifyDownloader(BaseDownloader):
             artists = [song.artist]
         doc["track"]["title"] = song.name
         doc["track"]["artists"] = artists
-        doc["track"]["artist_string"] = ", ".join(artists) if artists else (song.artist or "")
+        doc["track"]["artist_string"] = (
+            ", ".join(artists) if artists else (song.artist or "")
+        )
         if getattr(song, "album_name", None):
             doc["track"]["album"] = song.album_name
         if getattr(song, "album_artist", None):

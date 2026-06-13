@@ -34,13 +34,13 @@ class BaseDownloader(ABC):
     @contextmanager
     def temp_file_cleanup(self):
         """Context manager for safe temp file cleanup.
-        
+
         Only cleans up the specific temp file on error, not on success.
         Doesn't interfere with other ongoing downloads.
-        
+
         Yields:
             Callback function to register temp file path for cleanup
-            
+
         Example:
             with self.temp_file_cleanup() as register_temp:
                 temp_file = download_to_temp()
@@ -49,12 +49,12 @@ class BaseDownloader(ABC):
                 temp_file.rename(final_path)  # Success - no cleanup needed
         """
         temp_file_path: Optional[Path] = None
-        
+
         def register_temp(path: Path):
             """Register temp file for cleanup on error."""
             nonlocal temp_file_path
             temp_file_path = path
-        
+
         try:
             yield register_temp
         except Exception:
@@ -62,9 +62,15 @@ class BaseDownloader(ABC):
             if temp_file_path and temp_file_path.exists():
                 try:
                     temp_file_path.unlink()
-                    print(f"🧹 Cleaned up temp file: {temp_file_path.name}", file=sys.stderr)
+                    print(
+                        f"🧹 Cleaned up temp file: {temp_file_path.name}",
+                        file=sys.stderr,
+                    )
                 except Exception as cleanup_error:
-                    print(f"⚠️ Failed to clean up temp file: {cleanup_error}", file=sys.stderr)
+                    print(
+                        f"⚠️ Failed to clean up temp file: {cleanup_error}",
+                        file=sys.stderr,
+                    )
             raise
 
     def download(self, url: str, format: str):
@@ -134,12 +140,12 @@ class BaseDownloader(ABC):
         # Add provenance as freeform atoms
         audio["----:com.apple.iTunes:TRACK_URL"] = provenance.track_url.encode("utf-8")
         if provenance.playlist_url:
-            audio["----:com.apple.iTunes:PLAYLIST_URL"] = provenance.playlist_url.encode(
-                "utf-8"
+            audio["----:com.apple.iTunes:PLAYLIST_URL"] = (
+                provenance.playlist_url.encode("utf-8")
             )
         audio["----:com.apple.iTunes:SOURCE"] = provenance.source.encode("utf-8")
-        audio["----:com.apple.iTunes:ORIGINAL_FORMAT"] = provenance.original_format.encode(
-            "utf-8"
+        audio["----:com.apple.iTunes:ORIGINAL_FORMAT"] = (
+            provenance.original_format.encode("utf-8")
         )
         if provenance.isrc:
             audio["----:com.apple.iTunes:ISRC"] = provenance.isrc.encode("utf-8")
@@ -276,6 +282,38 @@ class BaseDownloader(ABC):
             file_path, self.output_dir, self.config.duplicate_handling
         )
 
+    def handle_found_duplicates(
+        self,
+        duplicates: list[Path],
+        artist: Optional[str] = None,
+        title: Optional[str] = None,
+        new_file_name: Optional[str] = None,
+    ) -> bool:
+        """Apply the configured duplicate-handling mode to found duplicates.
+
+        Thin wrapper around the shared decision logic so every source
+        (including pre-download checks) interprets ``duplicates.handling``
+        identically.
+
+        Args:
+            duplicates: Existing files considered duplicates of the new track.
+            artist: Artist of the new track (for display).
+            title: Title of the new track (for display).
+            new_file_name: Name of the new file, when known (for display).
+
+        Returns:
+            True if the new track should be skipped, False to keep it.
+        """
+        from ..duplicates import handle_duplicates
+
+        return handle_duplicates(
+            duplicates,
+            self.config.duplicate_handling,
+            artist=artist,
+            title=title,
+            new_file_name=new_file_name,
+        )
+
     def check_duplicate_for(
         self,
         artist: Optional[str],
@@ -303,46 +341,11 @@ class BaseDownloader(ABC):
 
         duplicates = find_duplicates(artist, title, self.output_dir)
         if exclude_path is not None:
-            duplicates = [d for d in duplicates if d.resolve() != exclude_path.resolve()]
+            duplicates = [
+                d for d in duplicates if d.resolve() != exclude_path.resolve()
+            ]
 
-        if not duplicates:
-            return False
-
-        handling = self.config.duplicate_handling
-
-        if handling == "skip":
-            print(f"⏭️ Skipped (already in library): {artist} - {title}")
-            return True
-
-        elif handling == "keep":
-            return False
-
-        else:  # interactive
-            print(f"\n⚠️ Duplicate track detected!")
-            print(f"  Artist: {artist}")
-            print(f"  Title: {title}")
-            print(f"\nExisting files:")
-            for i, dup in enumerate(duplicates, 1):
-                print(f"  {i}. {dup.name}")
-
-            print(f"\nWhat would you like to do?")
-            print(f"  [s] Skip new file (keep existing)")
-            print(f"  [k] Keep both")
-            print(f"  [r] Replace existing with new file", flush=True)
-
-            while True:
-                choice = input("Choice [s/k/r]: ").lower().strip()
-                if choice == "s":
-                    return True
-                elif choice == "k":
-                    return False
-                elif choice == "r":
-                    for dup in duplicates:
-                        print(f"Removing: {dup.name}")
-                        dup.unlink()
-                    return False
-                else:
-                    print("Invalid choice. Please enter s, k, or r.")
+        return self.handle_found_duplicates(duplicates, artist=artist, title=title)
 
     def flag_metadata_review(self, file_path: Path, reason: str, url: str = ""):
         """Flag file for metadata review.

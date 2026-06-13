@@ -42,6 +42,19 @@ class DirectDownloader(BaseDownloader):
                 print("⚠️ Could not determine file extension from URL")
                 original_ext = "m4a"  # Default
 
+            # Pre-download dedup by source URL. Direct files carry no metadata
+            # until fetched, so URL identity (stored as TRACK_URL on prior
+            # downloads) is all we have up front — but it's enough to avoid
+            # re-fetching bytes for a file we already have.
+            from ..duplicates import find_duplicates_by_track_url
+
+            existing = find_duplicates_by_track_url(url, self.output_dir)
+            if existing and self.handle_found_duplicates(
+                existing, new_file_name=original_name or url
+            ):
+                print("⏭️ Skipped (duplicate)")
+                return
+
             print(f"Downloading...")
 
             # Download file

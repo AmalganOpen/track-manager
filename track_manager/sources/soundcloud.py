@@ -90,7 +90,7 @@ class SoundCloudDownloader(YouTubeDownloader):
         if self.parent_downloader:
             print("🔗 Trying smart download...")
             if self.parent_downloader.try_smart_download(
-                url, target_format, playlist_url=playlist_url
+                url, target_format, playlist_url=playlist_url, check_duplicates=True
             ):
                 return True
 
@@ -103,10 +103,7 @@ class SoundCloudDownloader(YouTubeDownloader):
                 # downloading audio for tracks already in the library.
                 # Flat playlist extraction often gives title='Unknown',
                 # so we re-extract per-track here to get real tags.
-                meta = ydl.extract_info(url, download=False)
-                pre_artist = meta.get("artist") or meta.get("uploader")
-                pre_title = meta.get("track") or meta.get("title")
-                if self.check_duplicate_for(pre_artist, pre_title):
+                if self._check_predownload_duplicate(ydl, url):
                     return True
 
                 info = ydl.extract_info(url, download=True)

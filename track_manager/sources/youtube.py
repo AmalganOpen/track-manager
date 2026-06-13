@@ -210,7 +210,9 @@ class YouTubeDownloader(BaseDownloader):
         # ------------------------------------------------------------------
         if url_type == "video":
             if self.parent_downloader:
-                smart_success = self.parent_downloader.try_smart_download(url, target_format)
+                smart_success = self.parent_downloader.try_smart_download(
+                    url, target_format, check_duplicates=True
+                )
                 if smart_success:
                     print("✅ Downloaded via smart download")
                     return
@@ -219,6 +221,8 @@ class YouTubeDownloader(BaseDownloader):
 
             with yt_dlp.YoutubeDL(_ydl_opts(self.output_dir)) as ydl:
                 try:
+                    if self._check_predownload_duplicate(ydl, url):
+                        return
                     info = ydl.extract_info(url, download=True)
                     if self._process_download(info, target_format, None):
                         print("✅ Download complete")
@@ -248,7 +252,10 @@ class YouTubeDownloader(BaseDownloader):
                 try:
                     print("🔗 Trying smart download...")
                     smart_success = self.parent_downloader.try_smart_download(
-                        video_url, target_format, playlist_url=playlist_url
+                        video_url,
+                        target_format,
+                        playlist_url=playlist_url,
+                        check_duplicates=True,
                     )
 
                     if smart_success:
@@ -307,12 +314,33 @@ class YouTubeDownloader(BaseDownloader):
     # Per-track helpers
     # ------------------------------------------------------------------
 
+    def _check_predownload_duplicate(self, ydl: "yt_dlp.YoutubeDL", url: str) -> bool:
+        """Metadata-only pre-check: True if `url` is already in the library.
+
+        Does a cheap ``extract_info(download=False)`` so we can skip fetching
+        audio bytes for a track we already own. This runs on the yt-dlp path —
+        including ``--dumb``, where the smart-download dedup is bypassed — so a
+        re-download of an owned track is caught before any audio is fetched.
+        The post-download check in ``_process_download`` still remains as a
+        backstop for the cases this can't resolve (e.g. metadata only available
+        after download).
+        """
+        try:
+            meta = ydl.extract_info(url, download=False)
+        except Exception:
+            return False
+        pre_artist = meta.get("artist") or meta.get("uploader")
+        pre_title = meta.get("track") or meta.get("title")
+        return self.check_duplicate_for(pre_artist, pre_title)
+
     def _download_single_video(
         self, video_url: str, target_format: str, playlist_url: Optional[str] = None
     ) -> bool:
         """Download one video and route it through the finalize pipeline."""
         try:
             with yt_dlp.YoutubeDL(_ydl_opts(self.output_dir)) as ydl:
+                if self._check_predownload_duplicate(ydl, video_url):
+                    return True
                 info = ydl.extract_info(video_url, download=True)
                 return self._process_download(info, target_format, playlist_url)
         except Exception as e:
