@@ -242,7 +242,10 @@ def main() -> int:
         if not value
     ]
     if missing:
-        print(f"Missing required environment variables: {', '.join(missing)}", file=sys.stderr)
+        print(
+            f"Missing required environment variables: {', '.join(missing)}",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -270,8 +273,7 @@ def main() -> int:
             webhook_url=webhook_url,
             title=f"{repo.split('/')[-1]} → {branch}",
             summary=summary,
-            compare_url=compare_url
-            or f"https://github.com/{repo}/commit/{after_sha}",
+            compare_url=compare_url or f"https://github.com/{repo}/commit/{after_sha}",
             commit_count=commit_count,
         )
     except subprocess.CalledProcessError as exc:
