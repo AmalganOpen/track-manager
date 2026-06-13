@@ -6,8 +6,10 @@ re-download of an already-owned track is caught before any audio is fetched.
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from track_manager.sources.direct import DirectDownloader
+from track_manager.sources.soundcloud import SoundCloudDownloader
 from track_manager.sources.youtube import YouTubeDownloader
 
 
@@ -110,3 +112,32 @@ class TestDirectPredownloadCheck:
         except Exception:
             pass
         assert called["get"] is True
+
+
+class TestSoundCloudShareUrlRouting:
+    def test_in_query_sets_does_not_trigger_playlist_path(self, tmp_path: Path) -> None:
+        """Share links put ``/sets/`` in ``?in=`` but the path is still a track."""
+        config = SimpleNamespace(
+            duplicate_handling="skip", failed_log=tmp_path / "failed.log"
+        )
+        dl = SoundCloudDownloader(config, tmp_path)
+
+        share_url = (
+            "https://soundcloud.com/davejohannes/high-fashion-remix"
+            "?in=nikan_prod/sets/mejeriet/s-rDahfT6wfRM"
+        )
+        called = {"single": False, "playlist": False}
+
+        def fake_single(url: str, fmt: str, **kwargs) -> bool:
+            called["single"] = True
+            return True
+
+        def fake_playlist(url: str, fmt: str) -> None:
+            called["playlist"] = True
+
+        with patch.object(dl, "_download_single", fake_single):
+            with patch.object(dl, "_download_playlist", fake_playlist):
+                dl.download(share_url)
+
+        assert called["single"] is True
+        assert called["playlist"] is False

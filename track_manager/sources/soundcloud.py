@@ -7,6 +7,7 @@ metadata blob are handled by `tm_audio` / `tm_blob` downstream.
 
 import sys
 from typing import Optional
+from urllib.parse import urlparse
 
 import yt_dlp
 
@@ -64,7 +65,10 @@ class SoundCloudDownloader(YouTubeDownloader):
     def download(self, url: str, format: str = "auto"):
         target_format = tm_audio.resolve_format(format)
 
-        if "/sets/" in url:
+        # Only treat URL path as a set/playlist — query params like
+        # ``?in=user/sets/foo`` (SoundCloud share links) also contain
+        # ``/sets/`` but still point at a single track.
+        if "/sets/" in urlparse(url).path:
             self._download_playlist(url, target_format)
         else:
             self._download_single(url, target_format)
