@@ -7,6 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from track_manager.cli import cli
+from track_manager.self_update import UpdateResult
 
 
 class TestCLIIntegration:
@@ -184,22 +185,39 @@ class TestCLIIntegration:
         runner = CliRunner()
 
         with patch("track_manager.self_update.update_checkout") as mock_update:
+            mock_update.return_value = UpdateResult(
+                dependencies_changed=False,
+                reinstall_ran=False,
+                reinstall_deferred=False,
+            )
             result = runner.invoke(cli, ["update"])
 
             assert result.exit_code == 0
             mock_update.assert_called_once()
-            assert mock_update.call_args.kwargs["reinstall"] is True
+            assert mock_update.call_args.kwargs == {
+                "reinstall": True,
+                "force_reinstall": False,
+            }
             assert "Update complete" in result.output
+            assert "skipped pip install" in result.output
 
     def test_update_command_no_install(self):
         """Test update --no-install skips pip reinstall."""
         runner = CliRunner()
 
         with patch("track_manager.self_update.update_checkout") as mock_update:
+            mock_update.return_value = UpdateResult(
+                dependencies_changed=True,
+                reinstall_ran=False,
+                reinstall_deferred=False,
+            )
             result = runner.invoke(cli, ["update", "--no-install"])
 
             assert result.exit_code == 0
-            assert mock_update.call_args.kwargs["reinstall"] is False
+            assert mock_update.call_args.kwargs == {
+                "reinstall": False,
+                "force_reinstall": False,
+            }
 
     def test_version_option(self):
         """Test --version option."""

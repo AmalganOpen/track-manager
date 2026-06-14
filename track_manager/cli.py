@@ -518,9 +518,14 @@ def check_setup():
 @click.option(
     "--no-install",
     is_flag=True,
-    help="Only git pull; skip pip install -e .",
+    help="Only git pull; never run pip install -e .",
 )
-def update(no_install: bool):
+@click.option(
+    "--reinstall",
+    is_flag=True,
+    help="Always run pip install -e . (default: only when pyproject.toml changed)",
+)
+def update(no_install: bool, reinstall: bool):
     """Pull the latest code and reinstall this editable checkout."""
     from .self_update import project_root, update_checkout
 
@@ -541,7 +546,11 @@ def update(no_install: bool):
     click.echo()
 
     try:
-        update_checkout(root, reinstall=not no_install)
+        result = update_checkout(
+            root,
+            reinstall=not no_install,
+            force_reinstall=reinstall,
+        )
     except subprocess.CalledProcessError as exc:
         click.echo(
             f"\n❌ Update failed: {exc.cmd[0]} exited with {exc.returncode}", err=True
@@ -553,6 +562,16 @@ def update(no_install: bool):
 
     click.echo()
     click.echo("✅ Update complete")
+    if not result.reinstall_ran and not no_install:
+        click.echo(
+            "   Dependencies unchanged; skipped pip install "
+            "(code is already live in editable mode)."
+        )
+    elif result.reinstall_deferred:
+        click.echo(
+            "   pip install is finishing in the background "
+            "(Windows cannot replace tm.exe while it is running)."
+        )
     click.echo("   Run `tm check-setup` to sync config and verify dependencies.")
 
 
