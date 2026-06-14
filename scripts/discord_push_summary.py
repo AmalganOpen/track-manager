@@ -24,6 +24,7 @@ MAX_SUMMARY_CHARS = 1000
 DISCORD_USER_AGENT = (
     "TrackManager-GitHubActions/1.0 (+https://github.com/AmalganOpen/track-manager)"
 )
+SILENT_MARKER = "--silent"
 
 
 def validate_config(*, api_key: str, webhook_url: str, model: str) -> None:
@@ -92,16 +93,55 @@ def is_new_branch(before_sha: str) -> bool:
     return before_sha == "0" * 40
 
 
-def collect_push_context(before_sha: str, after_sha: str) -> dict[str, str]:
+def is_silent_commit(message: str) -> bool:
+    return SILENT_MARKER in message
+
+
+def get_commits_in_push(
+    before_sha: str, after_sha: str
+) -> list[tuple[str, str, str, str]]:
     if is_new_branch(before_sha):
-        commit_log = run_git("log", "--format=%h %s (%an)", "-n", "20", after_sha)
-        diff_stat = run_git("show", "--stat", "--format=", after_sha)
-        diff_patch = run_git("show", "--format=", after_sha)
+        raw = run_git("log", "--format=%H%x09%s%x09%b%x09%an", "-n", "20", after_sha)
     else:
-        log_range = f"{before_sha}..{after_sha}"
-        commit_log = run_git("log", "--format=%h %s (%an)", log_range)
-        diff_stat = run_git("diff", "--stat", log_range)
-        diff_patch = run_git("diff", log_range)
+        raw = run_git(
+            "log", "--format=%H%x09%s%x09%b%x09%an", f"{before_sha}..{after_sha}"
+        )
+    commits: list[tuple[str, str, str, str]] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        sha, subject, body, author = line.split("\t", 3)
+        commits.append((sha, subject, body, author))
+    return commits
+
+
+def collect_push_context(before_sha: str, after_sha: str) -> dict[str, str] | None:
+    commits = get_commits_in_push(before_sha, after_sha)
+    reportable = [
+        (sha, subject, author)
+        for sha, subject, body, author in commits
+        if not is_silent_commit(f"{subject}\n{body}")
+    ]
+
+    if not reportable:
+        return None
+
+    silent_count = len(commits) - len(reportable)
+    if silent_count:
+        print(f"Ignoring {silent_count} commit(s) marked --silent", flush=True)
+
+    commit_log = "\n".join(
+        f"{sha[:7]} {subject} ({author})" for sha, subject, author in reportable
+    )
+
+    diff_stats: list[str] = []
+    diff_patches: list[str] = []
+    for sha, _subject, _author in reversed(reportable):
+        diff_stats.append(run_git("show", "--stat", "--format=", sha))
+        diff_patches.append(run_git("show", "--format=", sha))
+
+    diff_stat = "\n\n".join(diff_stats)
+    diff_patch = "\n\n".join(diff_patches)
     if len(diff_patch) > MAX_DIFF_CHARS:
         diff_patch = diff_patch[:MAX_DIFF_CHARS] + "\n\n[diff truncated]"
 
@@ -261,6 +301,10 @@ def main() -> int:
 
     try:
         context = collect_push_context(before_sha, after_sha)
+        if context is None:
+            print("Skipping Discord notification: all commits marked --silent")
+            return 0
+
         print(f"Summarizing push with {model}...", flush=True)
         summary = summarize_with_claude(
             repo=repo,
