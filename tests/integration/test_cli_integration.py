@@ -179,6 +179,28 @@ class TestCLIIntegration:
                     assert result.exit_code == 0
                     assert "Checking track-manager dependencies" in result.output
 
+    def test_update_command(self):
+        """Test update command delegates to self_update helpers."""
+        runner = CliRunner()
+
+        with patch("track_manager.self_update.update_checkout") as mock_update:
+            result = runner.invoke(cli, ["update"])
+
+            assert result.exit_code == 0
+            mock_update.assert_called_once()
+            assert mock_update.call_args.kwargs["reinstall"] is True
+            assert "Update complete" in result.output
+
+    def test_update_command_no_install(self):
+        """Test update --no-install skips pip reinstall."""
+        runner = CliRunner()
+
+        with patch("track_manager.self_update.update_checkout") as mock_update:
+            result = runner.invoke(cli, ["update", "--no-install"])
+
+            assert result.exit_code == 0
+            assert mock_update.call_args.kwargs["reinstall"] is False
+
     def test_version_option(self):
         """Test --version option."""
         runner = CliRunner()

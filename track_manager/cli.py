@@ -1,5 +1,6 @@
 """Command-line interface for track-manager."""
 
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -99,7 +100,7 @@ def download(url: str, format: str, output: Optional[str], dumb: bool, no_cache:
 
     Supports: Spotify, YouTube, SoundCloud, and direct URLs.
 
-    Automatically downloads FLAC from DAB Music when available via ISRC lookup
+    Automatically downloads FLAC when available via ISRC lookup
     (unless --dumb is specified).
     """
     config = Config()
@@ -511,6 +512,48 @@ def check_setup():
             "⚠️ Some dependencies are missing. Please install them first.", err=True
         )
         sys.exit(1)
+
+
+@cli.command("update")
+@click.option(
+    "--no-install",
+    is_flag=True,
+    help="Only git pull; skip pip install -e .",
+)
+def update(no_install: bool):
+    """Pull the latest code and reinstall this editable checkout."""
+    from .self_update import project_root, update_checkout
+
+    root = project_root()
+    if root is None:
+        click.echo(
+            "❌ Could not find a track-manager source checkout.",
+            err=True,
+        )
+        click.echo(
+            "   This command only works for editable installs from git.",
+            err=True,
+        )
+        click.echo("   Try: pip install --upgrade track-manager", err=True)
+        sys.exit(1)
+
+    click.echo(f"📦 Updating track-manager in {root}")
+    click.echo()
+
+    try:
+        update_checkout(root, reinstall=not no_install)
+    except subprocess.CalledProcessError as exc:
+        click.echo(
+            f"\n❌ Update failed: {exc.cmd[0]} exited with {exc.returncode}", err=True
+        )
+        sys.exit(exc.returncode or 1)
+    except RuntimeError as exc:
+        click.echo(f"\n❌ {exc}", err=True)
+        sys.exit(1)
+
+    click.echo()
+    click.echo("✅ Update complete")
+    click.echo("   Run `tm check-setup` to sync config and verify dependencies.")
 
 
 @cli.command("upgrade")
