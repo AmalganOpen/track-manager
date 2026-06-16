@@ -9,6 +9,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -25,6 +26,59 @@ DISCORD_USER_AGENT = (
     "TrackManager-GitHubActions/1.0 (+https://github.com/AmalganOpen/track-manager)"
 )
 SILENT_MARKER = "--silent"
+FIELD_SEP = "\x1e"
+COMMIT_SEP = "\x1f"
+LOG_FORMAT = f"%H{FIELD_SEP}%s{FIELD_SEP}%b{FIELD_SEP}%an{COMMIT_SEP}"
+
+
+def repo_root() -> Path | None:
+    """Return the git repo root, or the package root when not in a git checkout."""
+    try:
+        return Path(run_git("rev-parse", "--show-toplevel"))
+    except subprocess.CalledProcessError:
+        candidate = Path(__file__).resolve().parent.parent
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+        return None
+
+
+def load_env_file(path: Path | None = None, *, override: bool = False) -> Path | None:
+    """Load ``KEY=VALUE`` lines from a dotenv file into :data:`os.environ`.
+
+    Skips comments and blank lines. Supports optional ``export `` prefixes and
+    single/double-quoted values. Existing environment variables are left alone
+    unless ``override`` is True.
+
+    Returns the path that was loaded, or None if the file does not exist.
+    """
+    if path is None:
+        root = repo_root()
+        if root is None:
+            return None
+        path = root / ".env"
+
+    if not path.is_file():
+        return None
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if not key:
+            continue
+        if not override and os.environ.get(key):
+            continue
+        os.environ[key] = value
+    return path
 
 
 def validate_config(*, api_key: str, webhook_url: str, model: str) -> None:
@@ -97,26 +151,56 @@ def is_silent_commit(message: str) -> bool:
     return SILENT_MARKER in message
 
 
-def get_commits_in_push(
-    before_sha: str, after_sha: str
-) -> list[tuple[str, str, str, str]]:
-    if is_new_branch(before_sha):
-        raw = run_git("log", "--format=%H%x09%s%x09%b%x09%an", "-n", "20", after_sha)
-    else:
-        raw = run_git(
-            "log", "--format=%H%x09%s%x09%b%x09%an", f"{before_sha}..{after_sha}"
-        )
+def parse_commit_records(raw: str) -> list[tuple[str, str, str, str]]:
+    """Parse ``git log`` output produced with :data:`LOG_FORMAT`."""
     commits: list[tuple[str, str, str, str]] = []
-    for line in raw.splitlines():
-        if not line.strip():
+    for record in raw.split(COMMIT_SEP):
+        record = record.strip()
+        if not record:
             continue
-        sha, subject, body, author = line.split("\t", 3)
+        parts = record.split(FIELD_SEP, 3)
+        if len(parts) != 4:
+            print(
+                f"Skipping malformed commit record ({len(parts)} fields): "
+                f"{record[:80]!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        sha, subject, body, author = parts
         commits.append((sha, subject, body, author))
     return commits
 
 
-def collect_push_context(before_sha: str, after_sha: str) -> dict[str, str] | None:
-    commits = get_commits_in_push(before_sha, after_sha)
+def get_commits_from_revision(revision: str) -> list[tuple[str, str, str, str]]:
+    """Return commits for one revision (single SHA or ``from..to`` range)."""
+    if ".." in revision:
+        raw = run_git("log", f"--format={LOG_FORMAT}", revision)
+    else:
+        sha = run_git("rev-parse", "--verify", revision)
+        raw = run_git("log", f"--format={LOG_FORMAT}", "-n", "1", sha)
+    return parse_commit_records(raw)
+
+
+def get_commits_for_revisions(
+    revisions: list[str],
+) -> list[tuple[str, str, str, str]]:
+    """Resolve one or more git revisions, deduplicating by full SHA."""
+    commits: list[tuple[str, str, str, str]] = []
+    seen: set[str] = set()
+    for revision in revisions:
+        for commit in get_commits_from_revision(revision):
+            if commit[0] in seen:
+                continue
+            seen.add(commit[0])
+            commits.append(commit)
+    return commits
+
+
+def collect_commits_context(
+    commits: list[tuple[str, str, str, str]],
+) -> dict[str, str] | None:
+    """Build LLM context for an explicit list of commits."""
     reportable = [
         (sha, subject, author)
         for sha, subject, body, author in commits
@@ -149,7 +233,69 @@ def collect_push_context(before_sha: str, after_sha: str) -> dict[str, str] | No
         "commit_log": commit_log or "(no commits)",
         "diff_stat": diff_stat or "(no diff stat)",
         "diff_patch": diff_patch or "(no patch)",
+        "reportable_shas": [sha for sha, _subject, _author in reportable],
     }
+
+
+def git_repo_slug() -> str:
+    """Best-effort ``owner/repo`` slug from ``origin``."""
+    try:
+        url = run_git("remote", "get-url", "origin")
+    except subprocess.CalledProcessError:
+        return "unknown/repo"
+
+    url = url.removesuffix(".git")
+    if url.startswith("git@"):
+        _, path = url.split(":", 1)
+        return path
+    if "github.com/" in url:
+        return url.split("github.com/", 1)[1]
+    return url.rsplit("/", 2)[-2] + "/" + url.rsplit("/", 1)[-1]
+
+
+def git_branch() -> str:
+    """Current branch name, or ``HEAD`` when detached."""
+    try:
+        return run_git("rev-parse", "--abbrev-ref", "HEAD")
+    except subprocess.CalledProcessError:
+        return "unknown"
+
+
+def compare_url_for_revisions(repo: str, revisions: list[str]) -> str:
+    """Build a GitHub compare/commit URL for the given revision args."""
+    base = f"https://github.com/{repo}"
+    if len(revisions) == 1 and ".." not in revisions[0]:
+        sha = run_git("rev-parse", "--verify", revisions[0])
+        return f"{base}/commit/{sha}"
+    if len(revisions) == 1 and ".." in revisions[0]:
+        left, _, right = revisions[0].partition("..")
+        left_sha = run_git("rev-parse", "--verify", left) if left else ""
+        right_sha = run_git("rev-parse", "--verify", right)
+        if left_sha:
+            return f"{base}/compare/{left_sha}...{right_sha}"
+        return f"{base}/commit/{right_sha}"
+    if revisions:
+        first = run_git("rev-parse", "--verify", revisions[0])
+        last = run_git("rev-parse", "--verify", revisions[-1])
+        if first != last:
+            return f"{base}/compare/{first}...{last}"
+        return f"{base}/commit/{first}"
+    return base
+
+
+def get_commits_in_push(
+    before_sha: str, after_sha: str
+) -> list[tuple[str, str, str, str]]:
+    if is_new_branch(before_sha):
+        raw = run_git("log", f"--format={LOG_FORMAT}", "-n", "20", after_sha)
+    else:
+        raw = run_git("log", f"--format={LOG_FORMAT}", f"{before_sha}..{after_sha}")
+    return parse_commit_records(raw)
+
+
+def collect_push_context(before_sha: str, after_sha: str) -> dict[str, str] | None:
+    commits = get_commits_in_push(before_sha, after_sha)
+    return collect_commits_context(commits)
 
 
 def summarize_with_claude(
@@ -266,6 +412,7 @@ def post_to_discord(
 
 
 def main() -> int:
+    load_env_file()
     api_key = normalize_secret(os.environ.get("ANTHROPIC_API_KEY", ""))
     webhook_url = normalize_secret(os.environ.get("DISCORD_WEBHOOK_URL", ""))
     before_sha = os.environ.get("GITHUB_BEFORE_SHA", "").strip()
