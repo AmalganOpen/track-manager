@@ -268,3 +268,92 @@ class TestCLIIntegration:
                 # Should not crash, just report error
                 assert result.exit_code != 0
                 assert "error" in result.output.lower()
+
+    def test_retry_failed_list(self, test_config, tmp_path):
+        """Test retry-failed --list shows unique URLs."""
+        runner = CliRunner()
+        failed_log = tmp_path / "failed.txt"
+        failed_log.write_text(
+            "2026-01-01 10:00 | https://example.com/a | timeout\n"
+            "2026-01-01 11:00 | https://example.com/b | not found\n"
+        )
+        test_config.config["failed_log"] = str(failed_log)
+
+        with patch("track_manager.cli.Config") as mock_config_class:
+            mock_config_class.return_value = test_config
+            result = runner.invoke(cli, ["retry-failed", "--list"])
+
+        assert result.exit_code == 0
+        assert "https://example.com/a" in result.output
+        assert "https://example.com/b" in result.output
+        assert "2 unique URL" in result.output
+
+    def test_retry_failed_dry_run(self, test_config, tmp_path):
+        """Test retry-failed --dry-run does not download."""
+        runner = CliRunner()
+        failed_log = tmp_path / "failed.txt"
+        failed_log.write_text(
+            "2026-01-01 10:00 | https://example.com/a | timeout\n",
+        )
+        test_config.config["failed_log"] = str(failed_log)
+
+        with patch("track_manager.cli.Config") as mock_config_class:
+            mock_config_class.return_value = test_config
+            with patch("track_manager.cli.Downloader.download") as mock_download:
+                result = runner.invoke(cli, ["retry-failed", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert "Would retry" in result.output
+        mock_download.assert_not_called()
+
+    def test_retry_failed_retries_and_clears_success(
+        self, test_config, tmp_path, temp_output_dir
+    ):
+        """Test retry-failed removes succeeded URLs from the log."""
+        runner = CliRunner()
+        failed_log = tmp_path / "failed.txt"
+        url = "https://open.spotify.com/track/test"
+        failed_log.write_text(f"2026-01-01 10:00 | {url} | timeout\n")
+        test_config.config["failed_log"] = str(failed_log)
+
+        with patch("track_manager.cli.Config") as mock_config_class:
+            mock_config_class.return_value = test_config
+            with patch("track_manager.cli.Downloader.download") as mock_download:
+                mock_download.return_value = True
+                result = runner.invoke(cli, ["retry-failed", "--yes"])
+
+        assert result.exit_code == 0
+        assert "Succeeded: 1" in result.output
+        assert failed_log.read_text() == ""
+        mock_download.assert_called_once()
+
+    def test_completions_print_flag(self):
+        """Test completions --print writes script to stdout."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["completions", "zsh", "--print"])
+
+        assert result.exit_code == 0
+        assert "# tm shell completions" in result.output
+        assert "#compdef" in result.output
+        assert result.output.startswith("\n# tm shell completions")
+
+    def test_completions_install(self, tmp_path):
+        """Test completions install writes repo file and shell rc block."""
+        runner = CliRunner()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "pyproject.toml").write_text("[project]\nname='track-manager'\n")
+        rc = tmp_path / ".zshrc"
+        rc.write_text("")
+
+        with (
+            patch("track_manager.shell_completions.project_root", return_value=repo),
+            patch("track_manager.shell_completions.shell_rc_path", return_value=rc),
+        ):
+            result = runner.invoke(cli, ["completions", "zsh"])
+
+        assert result.exit_code == 0
+        installed = list((repo / "completions").glob("_*"))
+        assert len(installed) == 1
+        assert "completions >>>" in rc.read_text()
+        assert "Wrote" in result.output
