@@ -370,6 +370,22 @@ def check_setup():
         click.echo("⚠️ spotdl: Not installed (optional, needed for Spotify)")
         click.echo("   Install: pip install spotdl")
 
+    # Check ffmpeg/ffprobe (required for encoding and probing)
+    try:
+        from . import deps as tm_deps
+
+        try:
+            ffmpeg_path, ffprobe_path = tm_deps.ensure_ffmpeg_available()
+            click.echo(f"✅ ffmpeg: {ffmpeg_path}")
+            click.echo(f"✅ ffprobe: {ffprobe_path}")
+        except tm_deps.MissingDependencyError as e:
+            # ensure_ffmpeg_available raises a friendly message; show it here
+            click.echo(f"❌ {e}", err=True)
+            all_ok = False
+    except Exception:
+        # Don't crash the setup check if something odd happens checking PATH
+        click.echo("⚠️ ffmpeg/ffprobe: could not check installation", err=True)
+
     # Check requests
     try:
         import requests

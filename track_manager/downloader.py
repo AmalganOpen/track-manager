@@ -512,9 +512,9 @@ class Downloader:
 
         if track.get("album", {}).get("cover"):
             cover_path = track["album"]["cover"].replace("-", "/")
-            doc["cover_art"][
-                "url"
-            ] = f"https://resources.tidal.com/images/{cover_path}/1280x1280.jpg"
+            doc["cover_art"]["url"] = (
+                f"https://resources.tidal.com/images/{cover_path}/1280x1280.jpg"
+            )
 
         doc["provenance"]["track_url"] = track_url
         doc["provenance"]["playlist_url"] = playlist_url
@@ -991,6 +991,18 @@ class Downloader:
         url = _strip_tracking_params(url)
         source_type = self.detect_source(url)
         target_format = tm_audio.resolve_format(format)
+
+        # Fail-fast when FFmpeg/ffprobe are missing to avoid downloading large
+        # files (lossless FLAC) only to fail during the encode/probe step.
+        # Use the shared dependency helper so messages are consistent and testable
+        from . import deps as tm_deps
+
+        try:
+            tm_deps.ensure_ffmpeg_available()
+        except tm_deps.MissingDependencyError as e:
+            # Reraise as RuntimeError so callers (CLI) treat it the same as other
+            # preflight failures we already surface.
+            raise RuntimeError(str(e))
 
         if show_header:
             print(f"🎵 Detected source: {source_type.title()}")

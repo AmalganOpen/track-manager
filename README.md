@@ -49,6 +49,45 @@ pip3 install -e .
 
 ## Setup
 
+### FFmpeg (required)
+
+Track Manager requires FFmpeg (the `ffmpeg` and `ffprobe` binaries) to be installed and available on your PATH. FFmpeg is used to probe audio, perform format conversions (e.g. FLAC → AIFF/M4A/MP3), and embed cover art. Without FFmpeg, lossless downloads and post-download processing will fail with an error such as "ffmpeg not found on PATH".
+
+Install:
+
+- macOS (Homebrew):
+
+  ```bash
+  brew install ffmpeg
+  ```
+
+- Debian/Ubuntu:
+
+  ```bash
+  sudo apt-get update && sudo apt-get install -y ffmpeg
+  ```
+
+- Fedora:
+
+  ```bash
+  sudo dnf install ffmpeg
+  ```
+
+- Windows:
+
+  Download a build from https://ffmpeg.org/download.html and add `ffmpeg.exe` to your PATH, or use Chocolatey:
+
+  ```powershell
+  choco install ffmpeg
+  ```
+
+Verify the installation:
+
+```bash
+ffmpeg -version
+ffprobe -version
+```
+
 ### Basic Setup (No Credentials Required)
 
 **Individual tracks** work for ANY platform (Apple Music, YouTube, SoundCloud, Deezer, Amazon Music, TIDAL, etc.):
