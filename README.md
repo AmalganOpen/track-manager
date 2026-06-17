@@ -55,6 +55,8 @@ Track Manager requires FFmpeg (the `ffmpeg` and `ffprobe` binaries) to be instal
 
 Install:
 
+Check out the [FFmpeg installation guide](https://www.ffmpeg.org/download.html) for your platform. Alternatively, use your platform's package manager (e.g. Homebrew, apt, dnf) to install FFmpeg.
+
 - macOS (Homebrew):
 
   ```bash
