@@ -95,4 +95,7 @@ def ensure_ffmpeg_available() -> Tuple[str, str]:
         )
         raise MissingDependencyError(msg)
 
+    # At this point both paths are guaranteed non-None; assert to help static
+    # type checkers narrow Optional[str] -> str for the return type.
+    assert ffmpeg_path is not None and ffprobe_path is not None
     return ffmpeg_path, ffprobe_path
