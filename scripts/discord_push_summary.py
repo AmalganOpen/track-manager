@@ -14,6 +14,7 @@ from typing import Any
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
+GITHUB_API_VERSION = "2022-11-28"
 DEFAULT_MODEL = "claude-sonnet-4-6"
 FALLBACK_MODELS = (
     "claude-sonnet-4-6",
@@ -95,6 +96,29 @@ def validate_config(*, api_key: str, webhook_url: str, model: str) -> None:
         )
     if not model:
         raise RuntimeError("ANTHROPIC_MODEL resolved to an empty value.")
+
+
+def get_json(
+    *,
+    url: str,
+    headers: dict[str, str],
+    service: str,
+    timeout: int,
+) -> Any:
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        detail = body.strip() or exc.reason
+        raise RuntimeError(f"{service} HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"{service} request failed: {exc.reason}") from exc
+
+    if not raw:
+        return {}
+    return json.loads(raw)
 
 
 def post_json(
@@ -298,6 +322,62 @@ def collect_push_context(before_sha: str, after_sha: str) -> dict[str, str] | No
     return collect_commits_context(commits)
 
 
+def github_api_headers(token: str) -> dict[str, str]:
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        "User-Agent": DISCORD_USER_AGENT,
+    }
+
+
+def find_pull_request_for_commit(
+    repo: str, sha: str, token: str
+) -> dict[str, Any] | None:
+    """Return the merged PR associated with a commit, if any."""
+    if not token:
+        return None
+
+    url = f"https://api.github.com/repos/{repo}/commits/{sha}/pulls"
+    try:
+        pulls = get_json(
+            url=url,
+            headers=github_api_headers(token),
+            service="GitHub",
+            timeout=30,
+        )
+    except RuntimeError as exc:
+        print(f"Could not look up PR for {sha[:7]}: {exc}", flush=True)
+        return None
+
+    if not isinstance(pulls, list) or not pulls:
+        return None
+
+    merged = [pr for pr in pulls if pr.get("merged_at")]
+    return merged[0] if merged else pulls[0]
+
+
+def resolve_push_credit(
+    *,
+    repo: str,
+    after_sha: str,
+    pusher: str,
+    github_token: str,
+) -> tuple[str, str | None, int | None]:
+    """Return credited author login, optional PR URL, and optional PR number."""
+    pr = find_pull_request_for_commit(repo, after_sha, github_token)
+    if pr is None:
+        return pusher, None, None
+
+    author = str((pr.get("user") or {}).get("login") or pusher)
+    pr_number = pr.get("number")
+    pr_url = pr.get("html_url")
+
+    parsed_number = pr_number if isinstance(pr_number, int) else None
+    parsed_url = pr_url if isinstance(pr_url, str) else None
+    return author, parsed_url, parsed_number
+
+
 def summarize_with_claude(
     *,
     repo: str,
@@ -384,21 +464,31 @@ def _summarize_with_model(*, prompt: str, api_key: str, model: str) -> str:
 def post_to_discord(
     *,
     webhook_url: str,
+    author: str,
     title: str,
     summary: str,
     compare_url: str,
     commit_count: int,
+    pr_number: int | None,
 ) -> None:
+    footer = f"{commit_count} commit(s)"
+    if pr_number is not None:
+        footer = f"PR #{pr_number} · {footer}"
+
     post_json(
         url=webhook_url,
         payload={
             "embeds": [
                 {
+                    "author": {
+                        "name": f"New contribution by @{author}",
+                        "url": f"https://github.com/{author}",
+                    },
                     "title": title,
                     "description": summary,
                     "url": compare_url,
                     "color": 5763719,
-                    "footer": {"text": f"{commit_count} commit(s)"},
+                    "footer": {"text": footer},
                 }
             ]
         },
@@ -421,6 +511,7 @@ def main() -> int:
     branch = os.environ.get("GITHUB_REF_NAME", "unknown").strip()
     pusher = os.environ.get("GITHUB_ACTOR", "unknown").strip()
     compare_url = os.environ.get("GITHUB_COMPARE_URL", "").strip()
+    github_token = normalize_secret(os.environ.get("GITHUB_TOKEN", ""))
     model = os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
     missing = [
@@ -452,6 +543,14 @@ def main() -> int:
             print("Skipping Discord notification: all commits marked --silent")
             return 0
 
+        credited_author, pr_url, pr_number = resolve_push_credit(
+            repo=repo,
+            after_sha=after_sha,
+            pusher=pusher,
+            github_token=github_token,
+        )
+        print(f"Crediting @{credited_author}", flush=True)
+
         print(f"Summarizing push with {model}...", flush=True)
         summary = summarize_with_claude(
             repo=repo,
@@ -464,13 +563,18 @@ def main() -> int:
         commit_count = len(
             [line for line in context["commit_log"].splitlines() if line.strip()]
         )
+        link_url = (
+            pr_url or compare_url or f"https://github.com/{repo}/commit/{after_sha}"
+        )
         print("Posting summary to Discord...", flush=True)
         post_to_discord(
             webhook_url=webhook_url,
+            author=credited_author,
             title=f"{repo.split('/')[-1]} → {branch}",
             summary=summary,
-            compare_url=compare_url or f"https://github.com/{repo}/commit/{after_sha}",
+            compare_url=link_url,
             commit_count=commit_count,
+            pr_number=pr_number,
         )
     except subprocess.CalledProcessError as exc:
         print(f"Git command failed: {exc.stderr or exc}", file=sys.stderr)
