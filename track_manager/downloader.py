@@ -992,6 +992,18 @@ class Downloader:
         source_type = self.detect_source(url)
         target_format = tm_audio.resolve_format(format)
 
+        # Fail-fast when FFmpeg/ffprobe are missing to avoid downloading large
+        # files (lossless FLAC) only to fail during the encode/probe step.
+        # Use the shared dependency helper so messages are consistent and testable
+        from . import deps as tm_deps
+
+        try:
+            tm_deps.ensure_ffmpeg_available()
+        except tm_deps.MissingDependencyError as e:
+            # Reraise as RuntimeError so callers (CLI) treat it the same as other
+            # preflight failures we already surface.
+            raise RuntimeError(str(e))
+
         if show_header:
             print(f"🎵 Detected source: {source_type.title()}")
             print(f"📁 Output directory: {self.output_dir}")

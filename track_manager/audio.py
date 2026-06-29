@@ -302,12 +302,21 @@ def resolve_format(requested: Optional[str]) -> str:
 
 
 def _run_ffmpeg(cmd: list[str]) -> None:
-    if not shutil.which("ffmpeg"):
-        raise EncodeError("ffmpeg not found on PATH")
+    # Centralised dependency check (and test simulation) lives in track_manager.deps
+    from . import deps as tm_deps
+
+    try:
+        tm_deps.ensure_ffmpeg_available()
+    except tm_deps.MissingDependencyError as e:
+        # Surface as an EncodeError so callers that expect encoding problems
+        # handle it uniformly.
+        raise EncodeError(str(e))
+
     try:
         subprocess.run(cmd, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as e:
-        raise EncodeError(f"ffmpeg failed: {e.stderr.strip()[-500:]}") from e
+        stderr_output = e.stderr.strip() if e.stderr else str(e)
+        raise EncodeError(f"ffmpeg failed: {stderr_output[-500:]}") from e
 
 
 # ---------------------------------------------------------------------------
