@@ -301,18 +301,7 @@ If you encounter other issues:
 
 ## Development
 
-For development, install with dev dependencies:
-
-```bash
-cd track-manager
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Run with coverage
-pytest --cov=track_manager
-```
+See **[docs/development.md](docs/development.md)** for setup, testing, code style, CI, and architecture notes.
 
 ## License
 
@@ -320,4 +309,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! See **[docs/development.md](docs/development.md)** for setup, testing, and PR workflow.
