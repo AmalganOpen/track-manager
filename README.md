@@ -202,7 +202,33 @@ When metadata is missing or problematic, tracks are flagged for manual review:
 
 ## Error Handling
 
-Failed downloads are logged to `failed-downloads.txt` with timestamps and error messages. You can retry failed URLs later.
+Failed downloads are logged to `failed-downloads.txt` with timestamps and error messages.
+
+```bash
+# List unique failed URLs (newest first)
+tm retry-failed --list
+
+# Retry everything in the log
+tm retry-failed
+
+# Preview without downloading
+tm retry-failed --dry-run
+
+# Clear the log
+tm retry-failed --clear
+```
+
+## Shell Completion
+
+```bash
+tm completions zsh
+```
+
+This writes an untracked script to ``completions/`` in the repo (gitignored)
+and adds a small marked block to ``~/.zshrc`` that sources it. Re-run after
+pulling CLI changes. Use ``--print`` to dump the script to stdout instead.
+
+Supported shells: ``bash``, ``zsh``, ``fish``.
 
 ## Troubleshooting
 

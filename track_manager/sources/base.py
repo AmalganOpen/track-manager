@@ -366,10 +366,6 @@ class BaseDownloader(ABC):
             url: URL that failed
             error: Error message
         """
-        from datetime import datetime
+        from ..failed_downloads import append_failure
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        log_entry = f"{timestamp} | {url} | {error}\n"
-
-        with open(self.config.failed_log, "a") as f:
-            f.write(log_entry)
+        append_failure(self.config.failed_log, url, error)

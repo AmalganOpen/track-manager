@@ -1,5 +1,6 @@
 """Command-line interface for track-manager."""
 
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -99,7 +100,7 @@ def download(url: str, format: str, output: Optional[str], dumb: bool, no_cache:
 
     Supports: Spotify, YouTube, SoundCloud, and direct URLs.
 
-    Automatically downloads FLAC from DAB Music when available via ISRC lookup
+    Automatically downloads FLAC when available via ISRC lookup
     (unless --dumb is specified).
     """
     config = Config()
@@ -119,6 +120,160 @@ def download(url: str, format: str, output: Optional[str], dumb: bool, no_cache:
         sys.exit(1)
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("retry-failed")
+@click.option(
+    "--log",
+    "log_path",
+    type=click.Path(),
+    help="Failed downloads log (overrides config)",
+)
+@click.option(
+    "--list",
+    "-l",
+    "list_only",
+    is_flag=True,
+    help="List failed URLs without retrying",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be retried without downloading",
+)
+@click.option(
+    "--clear",
+    is_flag=True,
+    help="Clear the failed-downloads log without retrying",
+)
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompts")
+@click.option(
+    "--format",
+    "-f",
+    type=click.Choice(["auto", "aiff", "m4a", "mp3"]),
+    default="auto",
+    help="Output format for retried downloads",
+)
+@click.option(
+    "--output", "-o", type=click.Path(), help="Output directory (overrides config)"
+)
+@click.option(
+    "--dumb",
+    is_flag=True,
+    help="Disable smart downloads (download directly from source)",
+)
+@click.option(
+    "--no-cache",
+    is_flag=True,
+    help="Bypass the persistent TIDAL ISRC→ID cache",
+)
+def retry_failed(
+    log_path: Optional[str],
+    list_only: bool,
+    dry_run: bool,
+    clear: bool,
+    yes: bool,
+    format: str,
+    output: Optional[str],
+    dumb: bool,
+    no_cache: bool,
+):
+    """Retry URLs from the failed-downloads log.
+
+    Reads ``failed_log`` from config (default: ``failed-downloads.txt``),
+    deduplicates by URL (newest failure first), and re-runs each download.
+    Successfully retried URLs are removed from the log; new failures are
+    logged automatically by the downloader.
+    """
+    from .failed_downloads import (
+        clear_log,
+        parse_failed_log,
+        remove_urls,
+        summarize_failed,
+    )
+
+    config = Config()
+    failed_log = Path(log_path) if log_path else config.failed_log
+    entries = parse_failed_log(failed_log)
+    candidates = summarize_failed(entries)
+
+    if not candidates:
+        click.echo(f"✅ No failed downloads in {failed_log}")
+        return
+
+    if list_only:
+        click.echo(f"Failed downloads ({len(candidates)} unique URL(s)):\n")
+        for index, (url, timestamp, error) in enumerate(candidates, 1):
+            click.echo(f"{index}. [{timestamp}] {url}")
+            click.echo(f"   {error}")
+        return
+
+    if clear:
+        if not yes and not click.confirm(
+            f"Clear {len(entries)} log line(s) ({len(candidates)} unique URL(s))?",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            return
+        clear_log(failed_log)
+        click.echo(f"✅ Cleared {failed_log}")
+        return
+
+    if dry_run:
+        click.echo(f"Would retry {len(candidates)} URL(s) from {failed_log}:\n")
+        for index, (url, timestamp, error) in enumerate(candidates, 1):
+            click.echo(f"{index}. [{timestamp}] {url}")
+            click.echo(f"   {error}")
+        return
+
+    if not yes and not click.confirm(
+        f"Retry {len(candidates)} failed URL(s) from {failed_log}?",
+        default=True,
+    ):
+        click.echo("Aborted.")
+        return
+
+    output_dir = Path(output) if output else config.output_dir
+    downloader = Downloader(config, output_dir, dumb=dumb, bypass_cache=no_cache)
+    urls = [url for url, _timestamp, _error in candidates]
+
+    remove_urls(failed_log, set(urls))
+
+    succeeded = 0
+    failed = 0
+    try:
+        for index, url in enumerate(urls):
+            if index:
+                click.echo()
+            click.echo(f"▶ [{index + 1}/{len(urls)}] {url}")
+            try:
+                result = downloader.download(url, format, show_header=False)
+            except KeyboardInterrupt:
+                click.echo("\n⚠️ Retry cancelled by user")
+                sys.exit(1)
+            except Exception as exc:
+                click.echo(f"❌ Error: {exc}", err=True)
+                failed += 1
+                continue
+
+            if result is False:
+                failed += 1
+            else:
+                succeeded += 1
+    finally:
+        remaining = len(summarize_failed(parse_failed_log(failed_log)))
+
+    click.echo()
+    click.echo("━" * 60)
+    click.echo(f"✅ Succeeded: {succeeded}")
+    if failed:
+        click.echo(f"❌ Failed:    {failed} (see {failed_log})")
+    if remaining:
+        click.echo(f"   {remaining} unique URL(s) still in log")
+
+    if failed:
         sys.exit(1)
 
 
@@ -527,6 +682,67 @@ def check_setup():
             "⚠️ Some dependencies are missing. Please install them first.", err=True
         )
         sys.exit(1)
+
+
+@cli.command("update")
+@click.option(
+    "--no-install",
+    is_flag=True,
+    help="Only git pull; never run pip install -e .",
+)
+@click.option(
+    "--reinstall",
+    is_flag=True,
+    help="Always run pip install -e . (default: only when pyproject.toml changed)",
+)
+def update(no_install: bool, reinstall: bool):
+    """Pull the latest code and reinstall this editable checkout."""
+    from .self_update import project_root, update_checkout
+
+    root = project_root()
+    if root is None:
+        click.echo(
+            "❌ Could not find a track-manager source checkout.",
+            err=True,
+        )
+        click.echo(
+            "   This command only works for editable installs from git.",
+            err=True,
+        )
+        click.echo("   Try: pip install --upgrade track-manager", err=True)
+        sys.exit(1)
+
+    click.echo(f"📦 Updating track-manager in {root}")
+    click.echo()
+
+    try:
+        result = update_checkout(
+            root,
+            reinstall=not no_install,
+            force_reinstall=reinstall,
+        )
+    except subprocess.CalledProcessError as exc:
+        click.echo(
+            f"\n❌ Update failed: {exc.cmd[0]} exited with {exc.returncode}", err=True
+        )
+        sys.exit(exc.returncode or 1)
+    except RuntimeError as exc:
+        click.echo(f"\n❌ {exc}", err=True)
+        sys.exit(1)
+
+    click.echo()
+    click.echo("✅ Update complete")
+    if not result.reinstall_ran and not no_install:
+        click.echo(
+            "   Dependencies unchanged; skipped pip install "
+            "(code is already live in editable mode)."
+        )
+    elif result.reinstall_deferred:
+        click.echo(
+            "   pip install is finishing in the background "
+            "(Windows cannot replace tm.exe while it is running)."
+        )
+    click.echo("   Run `tm check-setup` to sync config and verify dependencies.")
 
 
 @cli.command("upgrade")
@@ -1255,6 +1471,54 @@ def show_metadata(file: str):
     from .metadata import show_full_metadata
 
     show_full_metadata(Path(file))
+
+
+@cli.command("completions")
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
+@click.option(
+    "--print",
+    "print_only",
+    is_flag=True,
+    help="Print the completion script to stdout instead of installing",
+)
+@click.pass_context
+def completions(ctx: click.Context, shell: str, print_only: bool) -> None:
+    """Install shell tab-completion for this checkout.
+
+    By default writes an untracked script under ``completions/`` in the repo
+    (added to ``.gitignore``) and adds a marked block to your shell rc file
+    that sources it.
+
+    \b
+    Examples:
+      tm completions zsh
+      tm completions zsh --print   # stdout only, no install
+    """
+    from . import shell_completions as tm_completions
+
+    prog_name = ctx.find_root().info_name or "tm"
+
+    if print_only:
+        script = tm_completions.generate_script(
+            shell=shell, prog_name=prog_name, cli_group=cli
+        )
+        header = f"\n# tm shell completions (generated by: {prog_name} completions {shell})\n"
+        click.echo(f"{header}{script}", nl=False)
+        return
+
+    try:
+        result = tm_completions.install(shell=shell, prog_name=prog_name, cli_group=cli)
+    except click.ClickException:
+        raise
+    except OSError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"✅ Wrote {result.completion_file}")
+    click.echo(f"✅ Updated {result.shell_rc}")
+    click.echo(f"   ({result.completion_file.name} is gitignored via completions/)")
+    click.echo()
+    click.echo("Restart your shell or run:")
+    click.echo(f"  source {result.shell_rc}")
 
 
 def main():
