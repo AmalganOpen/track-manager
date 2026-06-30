@@ -5,7 +5,7 @@ Universal music downloader with smart duplicate detection and metadata managemen
 ## Features
 
 - 🎯 **Universal Platform Support** - Works with ANY music platform (Spotify, Apple Music, YouTube, SoundCloud, Deezer, Amazon Music, TIDAL, etc.)
-- 🎵 **High-Quality Downloads** - Automatic FLAC from TIDAL proxy
+- 🎵 **High-Quality Downloads** - Automatic FLAC from proxy
 - 🔍 **Smart Duplicate Detection** - Works across formats (M4A vs MP3)
 - 📝 **Metadata Management** - CSV-based review and correction workflow
 - 🤝 **Interactive Prompts** - Asks what to do when duplicates found
@@ -19,15 +19,15 @@ Universal music downloader with smart duplicate detection and metadata managemen
 Track Manager uses a **smart download system** to get the best quality audio:
 
 1. **Any URL** (Spotify, YouTube, etc.) → song.link API lookup
-2. **TIDAL proxy API** → Downloads lossless FLAC (16-bit/44.1kHz)
+2. **Proxy API** → Downloads lossless FLAC (16-bit/44.1kHz)
    - ✅ No credentials required
    - ✅ Includes full metadata and cover art
 3. **Automatic conversion** → M4A 256kbps AAC (preserves quality, better compatibility)
-4. **Fallback** → If not on TIDAL, downloads from from youtube or soundcloud
+4. **Fallback** → If not on proxy, downloads from from youtube or soundcloud
 
 **Quality comparison:**
 
-- TIDAL FLAC: 1411 kbps lossless → converted to M4A 256 kbps
+- FLAC: 1411 kbps lossless → converted to M4A 256 kbps
 - YouTube: ~128 kbps M4A
 - SoundCloud: ~128 kbps → M4A 256 kbps (for less lossy conversion)
 
@@ -69,12 +69,6 @@ Check out the [FFmpeg installation guide](https://www.ffmpeg.org/download.html) 
   sudo apt-get update && sudo apt-get install -y ffmpeg
   ```
 
-- Fedora:
-
-  ```bash
-  sudo dnf install ffmpeg
-  ```
-
 - Windows:
 
   Download a build from https://ffmpeg.org/download.html and add `ffmpeg.exe` to your PATH, or use Chocolatey:
@@ -83,7 +77,7 @@ Check out the [FFmpeg installation guide](https://www.ffmpeg.org/download.html) 
   choco install ffmpeg
   ```
 
-Verify the installation:
+Restart terminal && verify the installation:
 
 ```bash
 ffmpeg -version
@@ -94,7 +88,7 @@ ffprobe -version
 
 **Individual tracks** work for ANY platform (Apple Music, YouTube, SoundCloud, Deezer, Amazon Music, TIDAL, etc.):
 
-- ✅ Converted via song.link → TIDAL for high-quality FLAC
+- ✅ Converted via song.link → Proxy for high-quality FLAC
 - ✅ No credentials needed
 
 **Playlists** only work for:
@@ -107,7 +101,7 @@ ffprobe -version
 
 **Spotify API credentials are optional:**
 
-- ✅ **Individual Spotify track URLs work without credentials** (downloaded via TIDAL)
+- ✅ **Individual Spotify track URLs work without credentials**
 - ⚠️ **Playlist/album URLs require Spotify API** to enumerate tracks
 
 **To enable Spotify playlist support:**
@@ -224,11 +218,11 @@ tm retry-failed --clear
 tm completions zsh
 ```
 
-This writes an untracked script to ``completions/`` in the repo (gitignored)
-and adds a small marked block to ``~/.zshrc`` that sources it. Re-run after
-pulling CLI changes. Use ``--print`` to dump the script to stdout instead.
+This writes an untracked script to `completions/` in the repo (gitignored)
+and adds a small marked block to `~/.zshrc` that sources it. Re-run after
+pulling CLI changes. Use `--print` to dump the script to stdout instead.
 
-Supported shells: ``bash``, ``zsh``, ``fish``.
+Supported shells: `bash`, `zsh`, `fish`.
 
 ## Troubleshooting
 
