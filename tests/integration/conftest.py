@@ -111,6 +111,16 @@ def _make_spotify_mock_instance() -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
+def mock_ffmpeg_available():
+    """Integration tests mock external services; ffmpeg need not be on PATH."""
+    with patch(
+        "track_manager.deps.ensure_ffmpeg_available",
+        return_value=("/usr/bin/ffmpeg", "/usr/bin/ffprobe"),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def auto_mock_spotify():
     """Automatically mock SpotifyDownloader for all tests to avoid authentication."""
     with patch("track_manager.sources.spotify.SpotifyDownloader") as mock_spotify_class:
