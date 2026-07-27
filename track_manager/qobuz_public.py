@@ -14,13 +14,14 @@ The community proxies typically expose 27 reliably; higher tiers depend
 on the operator's Qobuz subscription level.
 
 This currently uses a single-endpoint setup because only one proxy in the
-wild (qobuz.kennyy.com.br) actually responds today; if more come online
+wild (qobuz2.kennyy.com.br) actually responds today; if more come online
 we can add rotation similar to tidal_public._fetch_instances().
 
-Discovered by inspecting what monochrome.tf's web frontend does on
-Download click — it uses Qobuz exclusively for audio, with TIDAL only
-for metadata. See docs/tidal-endpoints.md and the conversation log for
-context.
+Originally discovered by inspecting monochrome.tf's web frontend (which
+used Qobuz for audio and TIDAL for metadata). As of 2026-07 the operator
+relocated from qobuz.kennyy.com.br → qobuz2.kennyy.com.br; monochrome's
+frontend still hardcodes the old host and has stubbed Qobuz streaming.
+See docs/tidal-endpoints.md and the conversation log for context.
 """
 
 import os
@@ -48,15 +49,16 @@ class QobuzPublicClient:
     """Client for community-hosted Qobuz proxies.
 
     Single-endpoint for now; the canonical working proxy is
-    `qobuz.kennyy.com.br` (operated by `kennyy`, also runs the
-    Brazilian hifi-api/Qobuz infrastructure used by monochrome.tf).
+    `qobuz2.kennyy.com.br` (operated by `kennyy`, same Brazilian
+    Qobuz infrastructure previously at qobuz.kennyy.com.br).
     """
 
     ENDPOINTS = [
-        "https://qobuz.kennyy.com.br",
+        "https://qobuz2.kennyy.com.br",
         # Known-broken (kept for re-evaluation):
-        # "https://qobuz.squid.wtf",   # 200 but empty results / captcha-walled
-        # "https://qobuz.kennyy.com",  # NXDOMAIN (only the .com.br variant works)
+        # "https://qobuz.kennyy.com.br",  # CF 522 — origin down since ~2026-07
+        # "https://qobuz.squid.wtf",      # NXDOMAIN (entire squid qobuz fleet retired)
+        # "https://qobuz.kennyy.com",     # NXDOMAIN
     ]
 
     def __init__(self, bypass_cache: bool = False):
@@ -121,7 +123,7 @@ class QobuzPublicClient:
     ) -> Optional[requests.Response]:
         """GET with one retry on Read/Connect timeout.
 
-        kennyy.com.br is a single-endpoint community proxy that
+        qobuz2.kennyy.com.br is a single-endpoint community proxy that
         occasionally takes >10s to respond — usually for ISRCs whose
         Qobuz search returns lots of hits. A single retry with a tiny
         backoff salvages those bad-luck failures cheaply (worst-case

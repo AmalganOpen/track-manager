@@ -813,7 +813,7 @@ class Downloader:
 
         # Smart-download chain (lossless first):
         #   1) Qobuz public proxy — true 16/44.1 FLAC, requires ISRC.
-        #      Fast and reliable as long as kennyy.com.br is up.
+        #      Fast and reliable as long as qobuz2.kennyy.com.br is up.
         #   2) TIDAL public hifi-api — LOSSLESS FLAC (or HIGH AAC) via
         #      community-hosted streaming proxies. Volatile.
         # Falls through to YouTube/SoundCloud/spotdl in the caller when both fail.
