@@ -7,6 +7,13 @@ from typing import Dict, List, Optional
 
 from mutagen import File as MutagenFile
 
+# utf-8-sig: write a BOM so Excel on Windows recognises UTF-8 (Chinese /
+# other non-ANSI paths otherwise become mojibake); on read the BOM is
+# stripped so DictReader still sees the normal header row. Without an
+# explicit encoding, Windows defaults to the ANSI code page (e.g. cp1252)
+# and crashes or corrupts any non-ASCII file_path.
+_CSV_ENCODING = "utf-8-sig"
+
 CSV_HEADERS = [
     "file_path",
     "current_artist",
@@ -95,12 +102,12 @@ def flag_for_review(file_path: Path, reason: str, url: str):
     # Create CSV if it doesn't exist
     if not csv_path.exists():
         csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(csv_path, "w", newline="") as f:
+        with open(csv_path, "w", newline="", encoding=_CSV_ENCODING) as f:
             writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
             writer.writeheader()
 
     # Append entry
-    with open(csv_path, "a", newline="") as f:
+    with open(csv_path, "a", newline="", encoding=_CSV_ENCODING) as f:
         writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
         writer.writerow(
             {
@@ -126,7 +133,7 @@ def show_pending_reviews():
         print(f"No review file found at: {csv_path}")
         return
 
-    with open(csv_path, "r", newline="") as f:
+    with open(csv_path, "r", newline="", encoding=_CSV_ENCODING) as f:
         reader = csv.DictReader(f)
         rows = list(reader)
 
@@ -163,9 +170,15 @@ def sanitize_filename(text: str) -> str:
     Returns:
         Sanitized text
     """
+    # Windows + cross-platform forbidden filename characters. Keep non-ASCII
+    # (Chinese, Japanese, etc.) intact — NTFS/APFS handle them fine; the
+    # failure mode on Windows is usually locale encoding of *text files*
+    # that store paths, not the filesystem itself.
     unsafe_chars = ["/", "\\", ":", "*", "?", '"', "<", ">", "|"]
     for char in unsafe_chars:
         text = text.replace(char, "-")
+    # Strip C0 control characters (illegal on Windows; can break terminals).
+    text = "".join(c for c in text if ord(c) >= 32)
     text = text.strip(". ")
     return text
 
@@ -187,7 +200,7 @@ def apply_metadata_csv(dry_run: bool = False) -> dict:
         return result
 
     # Read all rows
-    with open(csv_path, "r", newline="") as f:
+    with open(csv_path, "r", newline="", encoding=_CSV_ENCODING) as f:
         reader = csv.DictReader(f)
         rows = list(reader)
 
@@ -233,7 +246,7 @@ def apply_metadata_csv(dry_run: bool = False) -> dict:
     # Write remaining rows back to CSV (skip in dry run)
     if not dry_run:
         if remaining_rows:
-            with open(csv_path, "w", newline="") as f:
+            with open(csv_path, "w", newline="", encoding=_CSV_ENCODING) as f:
                 writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
                 writer.writeheader()
                 writer.writerows(remaining_rows)

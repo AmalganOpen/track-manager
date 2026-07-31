@@ -1523,6 +1523,16 @@ def completions(ctx: click.Context, shell: str, print_only: bool) -> None:
 
 def main():
     """Main entry point."""
+    # Windows consoles often use a legacy ANSI code page (cp1252 etc.).
+    # Without this, printing Chinese / other non-ASCII filenames raises
+    # UnicodeEncodeError. Prefer UTF-8; fall back to replace so a bad
+    # glyph never aborts a download batch.
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError):
+                pass
     cli()
 
 

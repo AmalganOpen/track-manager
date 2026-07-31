@@ -232,12 +232,12 @@ class BaseDownloader(ABC):
         Returns:
             Sanitized text
         """
-        # Replace unsafe characters
+        # Keep in sync with track_manager.metadata.sanitize_filename.
+        # Non-ASCII (Chinese, etc.) is preserved intentionally.
         unsafe_chars = ["/", "\\", ":", "*", "?", '"', "<", ">", "|"]
         for char in unsafe_chars:
             text = text.replace(char, "-")
-
-        # Remove leading/trailing whitespace and dots
+        text = "".join(c for c in text if ord(c) >= 32)
         text = text.strip(". ")
 
         return text

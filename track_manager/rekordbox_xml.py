@@ -27,10 +27,10 @@ modified.
 
 from __future__ import annotations
 
-import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import NamedTuple, Optional
+from urllib.request import pathname2url, url2pathname
 
 # Rekordbox writes file URLs in macOS NSURL form with the explicit
 # "localhost" host (e.g. file://localhost/Users/...).  Some older exports
@@ -173,27 +173,40 @@ def _probe_for_xml(path: Path) -> dict:
 
 
 def _decode_rb_url(url: str) -> Path:
-    """Decode a Rekordbox file URL into a Path. Accepts both forms."""
+    """Decode a Rekordbox file URL into a Path. Accepts both forms.
+
+    Handles percent-encoded non-ASCII (Chinese etc.) and Windows drive
+    paths (``file://localhost/C:/...`` / ``C%3A``) via ``url2pathname``.
+    """
     if url.startswith(_RB_URL_PREFIX):
         rest = url[len(_RB_URL_PREFIX) :]
     elif url.startswith("file:///"):
-        # spec-correct form: file:///Users/...
+        # spec-correct form: file:///Users/... or file:///C:/...
         rest = url[len("file://") :]
     else:
         raise ValueError(f"unrecognised URL scheme: {url[:40]!r}")
 
-    decoded = urllib.parse.unquote(rest)
-    if not decoded.startswith("/"):
+    # Leave percent-encoding intact — url2pathname unquotes and, on
+    # Windows, turns /C:/Users/... into C:\Users\...
+    decoded = url2pathname(rest)
+    path = Path(decoded)
+    if not path.is_absolute():
         raise ValueError(f"path is not absolute after decode: {decoded!r}")
-    return Path(decoded)
+    return path
 
 
 def _encode_rb_url(path: Path) -> str:
-    """Encode a Path into Rekordbox's file URL form."""
-    # Keep '/' literal so the path stays human-readable; everything else
-    # gets percent-encoded the same way Rekordbox does it.
-    encoded = urllib.parse.quote(str(path), safe="/")
-    return f"{_RB_URL_PREFIX}{encoded}"
+    """Encode a Path into Rekordbox's file URL form.
+
+    Uses ``pathname2url`` so Windows backslashes become ``/C:/...`` and
+    non-ASCII characters are percent-encoded as UTF-8.
+    """
+    quoted = pathname2url(str(path.resolve()))
+    # Windows pathname2url yields ///C:/...; Rekordbox localhost URLs
+    # expect a single leading slash: /C:/...
+    if quoted.startswith("///"):
+        quoted = quoted[2:]
+    return f"{_RB_URL_PREFIX}{quoted}"
 
 
 def _is_inside(child: Path, parent: Path) -> bool:

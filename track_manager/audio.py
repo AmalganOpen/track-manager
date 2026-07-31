@@ -80,7 +80,13 @@ def probe_audio(path: Path) -> dict[str, Any]:
             str(path),
         ]
         out = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, timeout=30
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+            timeout=30,
         )
         data = json.loads(out.stdout)
     except (
@@ -313,7 +319,14 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         raise EncodeError(str(e))
 
     try:
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+        )
     except subprocess.CalledProcessError as e:
         stderr_output = e.stderr.strip() if e.stderr else str(e)
         raise EncodeError(f"ffmpeg failed: {stderr_output[-500:]}") from e
