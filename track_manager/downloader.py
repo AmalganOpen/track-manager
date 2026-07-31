@@ -757,7 +757,7 @@ class Downloader:
         playlist_url: Optional[str] = None,
         check_duplicates: bool = False,
     ) -> bool:
-        """Try to download via the smart-download chain (Qobuz → TIDAL).
+        """Try to download via the smart-download chain (Qobuz; TIDAL disabled).
 
         Args:
             url: Track URL (for ISRC lookup if needed)
@@ -794,11 +794,11 @@ class Downloader:
         # a TIDAL track id from the URL, and TIDAL's /info/ endpoint gives us
         # the ISRC. The api pool is much more reliable than the streaming
         # pool, so this works even when TIDAL streaming hosts are all 502.
-        # Both branches below reuse the prefetched track_info to avoid a
-        # second round-trip.
-        tidal_track = None
+        # (Streaming downloads themselves are disabled below; this lookup is
+        # only to feed Qobuz an ISRC. If re-enabling _try_tidal_public,
+        # capture the track dict again as `prefetched_track`.)
         if not isrc:
-            isrc, tidal_track = self._resolve_isrc_via_tidal(url)
+            isrc, _ = self._resolve_isrc_via_tidal(url)
 
         # Quality-aware dedup: now that the ISRC is resolved (the strongest
         # cross-source identity), see if we already own this track and can
@@ -814,9 +814,11 @@ class Downloader:
         # Smart-download chain (lossless first):
         #   1) Qobuz public proxy — true 16/44.1 FLAC, requires ISRC.
         #      Fast and reliable as long as qobuz2.kennyy.com.br is up.
-        #   2) TIDAL public hifi-api — LOSSLESS FLAC (or HIGH AAC) via
-        #      community-hosted streaming proxies. Volatile.
-        # Falls through to YouTube/SoundCloud/spotdl in the caller when both fail.
+        #   2) TIDAL public hifi-api — DISABLED. The community streaming
+        #      pool has been in a near-permanent OAuth blackout (every
+        #      /track/ host 401/403/PREVIEW). Kept for re-enable if the
+        #      ecosystem recovers; see docs/tidal-endpoints.md.
+        # Falls through to YouTube/SoundCloud/spotdl in the caller when Qobuz fails.
         if self._try_qobuz_public(
             url,
             target_format,
@@ -825,14 +827,15 @@ class Downloader:
             isrc=isrc,
         ):
             return True
-        return self._try_tidal_public(
-            url,
-            target_format,
-            spotify_metadata,
-            playlist_url=playlist_url,
-            isrc=isrc,
-            prefetched_track=tidal_track,
-        )
+        # return self._try_tidal_public(
+        #     url,
+        #     target_format,
+        #     spotify_metadata,
+        #     playlist_url=playlist_url,
+        #     isrc=isrc,
+        #     prefetched_track=None,  # or reuse ISRC-lookup track if captured above
+        # )
+        return False
 
     def _find_owned_copy(self, url: str, isrc: Optional[str]) -> Optional[Path]:
         """Return an existing library file for this track, or None.

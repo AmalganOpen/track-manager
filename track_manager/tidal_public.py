@@ -41,6 +41,10 @@ _INSTANCES_TTL = 6 * 3600  # 6 hours; monochrome.tf updates a few times a day
 # disk cache exists. Don't bother grooming this list — the live source
 # is the one that gets updated. This just keeps us afloat for the first
 # run if the user has no network or monochrome.tf itself is down.
+#
+# Streaming pool is commented out: community /track/ hosts have been in a
+# near-permanent OAuth blackout, and Downloader.try_smart_download no longer
+# calls into TIDAL streaming. Api hosts are kept for ISRC lookup only.
 _HARDCODED_FALLBACK = {
     "api": [
         "https://eu-central.monochrome.tf",
@@ -48,8 +52,8 @@ _HARDCODED_FALLBACK = {
         "https://api.monochrome.tf",
     ],
     "streaming": [
-        "https://hifi.p1nkhamster.xyz",
-        "https://eu-central.monochrome.tf",
+        # "https://hifi.p1nkhamster.xyz",
+        # "https://eu-central.monochrome.tf",
     ],
 }
 
