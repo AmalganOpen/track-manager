@@ -56,7 +56,7 @@ class Config:
             )
             sys.exit(1)
 
-        with open(self.config_path) as f:
+        with open(self.config_path, encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
         # Expand home directory in paths
