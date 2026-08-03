@@ -230,7 +230,11 @@ class Downloader:
         Returns True on success.
         """
         if not isrc:
-            return False  # Qobuz requires ISRC; let caller try other sources
+            print(
+                "ℹ️ Skipping Qobuz (no ISRC resolved for this track)",
+                file=sys.stderr,
+            )
+            return False
 
         from .qobuz_public import QobuzPublicClient
 
@@ -240,7 +244,7 @@ class Downloader:
             client = self._qobuz_client
 
             print(f"🎵 Searching Qobuz (ISRC: {isrc})...")
-            temp_path = self.output_dir / f".tmp_qobuz_{isrc}"
+            temp_path = self.output_dir / f".tmp_qobuz_{isrc}.flac"
             track = client.download_by_isrc(isrc, temp_path)
             if not track:
                 print("ℹ️ Track not available via Qobuz")
@@ -800,6 +804,16 @@ class Downloader:
         if not isrc:
             isrc, _ = self._resolve_isrc_via_tidal(url)
 
+        # Second chance: song.link → Spotify ISRC when Spotify API creds
+        # are configured. Helps when TIDAL /info/ is down but Qobuz still
+        # works — without an ISRC we would silently skip Qobuz entirely.
+        if not isrc and self._has_spotify_credentials():
+            looked_up, meta = self._lookup_isrc(url, self.detect_source(url))
+            if looked_up:
+                isrc = looked_up
+                if spotify_metadata is None and meta:
+                    spotify_metadata = meta
+
         # Quality-aware dedup: now that the ISRC is resolved (the strongest
         # cross-source identity), see if we already own this track and can
         # skip the download or turn it into an in-place upgrade instead.
@@ -1055,8 +1069,8 @@ class Downloader:
                     self._log_failure(url, "Spotify playlist requires API credentials")
                     return False
                 else:
-                    # Single track - download via TIDAL (song.link)
-                    print("ℹ️ Spotify API not configured, downloading via TIDAL")
+                    # Single track - download via smart path (Qobuz)
+                    print("ℹ️ Spotify API not configured, trying smart download")
                     print("   (For playlist support, add Spotify API credentials)")
                     print()
 
@@ -1067,13 +1081,13 @@ class Downloader:
                     if success:
                         return True
                     else:
-                        print("❌ Failed to download via TIDAL", file=sys.stderr)
+                        print("❌ Smart download failed", file=sys.stderr)
                         print(
                             "   Spotify API credentials needed for this track",
                             file=sys.stderr,
                         )
                         self._log_failure(
-                            url, "TIDAL download failed, Spotify API needed"
+                            url, "Smart download failed, Spotify API needed"
                         )
                         return False
 

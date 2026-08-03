@@ -44,6 +44,10 @@ _CACHE_FILE = _CACHE_DIR / "qobuz_id_cache.json"
 # the sweet spot — universally available, lossless, and matches CD quality.
 _QUALITY_FLAC = 27
 
+# Browser-like UA: Cloudflare in front of the community proxy rejects
+# some non-browser agents. Keep this generic — no OS fingerprint.
+_USER_AGENT = "Mozilla/5.0 (compatible; track-manager/1.0; +https://github.com/gptme)"
+
 
 class QobuzPublicClient:
     """Client for community-hosted Qobuz proxies.
@@ -73,7 +77,7 @@ class QobuzPublicClient:
         self.session = requests.Session()
         # Most community proxies front-end through Cloudflare and reject
         # non-browser User-Agents. A generic Mozilla string is enough.
-        self.session.headers.update({"User-Agent": "Mozilla/5.0 (track-manager)"})
+        self.session.headers.update({"User-Agent": _USER_AGENT})
         self._isrc_cache: Optional[dict] = None
 
     # ------------------------------------------------------------------
@@ -87,7 +91,7 @@ class QobuzPublicClient:
             if _CACHE_FILE.exists():
                 import json
 
-                self._isrc_cache = json.loads(_CACHE_FILE.read_text())
+                self._isrc_cache = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
             else:
                 self._isrc_cache = {}
         except (OSError, ValueError):
@@ -101,7 +105,10 @@ class QobuzPublicClient:
             import json
 
             _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _CACHE_FILE.write_text(json.dumps(self._isrc_cache, indent=2))
+            _CACHE_FILE.write_text(
+                json.dumps(self._isrc_cache, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
         except OSError:
             pass
 

@@ -156,6 +156,12 @@ track-manager check-duplicates
 # Verify installation and setup
 track-manager check-setup
 
+# Pitch-tune a track in place (pitch only; BPM stays the same)
+tm tune "midnight" 2.5          # +2.5% pitch interval — same file, tags updated
+tm tune "midnight" -3           # -3% (inverse of +3%)
+tm tune "midnight" 50 -c        # +50 cents
+tm tune ~/Music/track.aiff 2 -a # absolute filesystem path
+
 # Get help
 track-manager --help
 ```

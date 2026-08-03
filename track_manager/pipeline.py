@@ -34,14 +34,33 @@ def finalize(
     target_format: str,
     cover_data: Optional[bytes] = None,
 ) -> Optional[Path]:
-    """Encode/passthrough → probe → tag → blob. Mutates `doc` in place."""
+    """Encode/passthrough → probe → tag → blob. Mutates `doc` in place.
+
+    On Windows, when `final_path` contains non-ASCII characters, the encode
+    / probe / tag steps run against an ASCII staging file and the result is
+    renamed at the end — Windows ffmpeg/ffprobe builds often reject
+    Chinese (and other non-ASCII) paths even though NTFS accepts them.
+    """
+    # Stage under an ASCII name on Windows so ffmpeg/ffprobe never see
+    # non-ASCII argv. pathlib.rename at the end handles the Unicode name.
+    work_path = final_path
+    staged = False
+    if sys.platform == "win32" and not tm_audio._is_ascii_path(final_path):
+        work_path = tm_audio.ascii_staging_path(final_path, prefix=".tm_final")
+        staged = True
+
     try:
-        tm_audio.encode_or_passthrough(target_format, temp_path, final_path)
+        tm_audio.encode_or_passthrough(target_format, temp_path, work_path)
     except tm_audio.EncodeError as e:
         print(f"⚠️ Encoding failed: {e}", file=sys.stderr)
         if temp_path.exists():
             try:
                 temp_path.unlink()
+            except OSError:
+                pass
+        if staged and work_path.exists():
+            try:
+                work_path.unlink()
             except OSError:
                 pass
         return None
@@ -58,7 +77,7 @@ def finalize(
         doc["cover_art"]["sha256"] = sha256(cover_data).hexdigest()
         doc["cover_art"]["embedded"] = True
 
-    info = tm_audio.probe_audio(final_path)
+    info = tm_audio.probe_audio(work_path)
     doc.setdefault("audio", {})
     doc["audio"]["format"] = target_format
     doc["audio"]["codec"] = info.get("codec")
@@ -74,13 +93,22 @@ def finalize(
         doc["track"]["duration_seconds"] = info["duration_seconds"]
 
     try:
-        tm_audio.apply_basic_tags(final_path, doc, cover_data)
+        tm_audio.apply_basic_tags(work_path, doc, cover_data)
     except Exception as e:
         print(f"⚠️ Failed to apply player-visible tags: {e}", file=sys.stderr)
 
     try:
-        tm_blob.write_blob(final_path, doc)
+        tm_blob.write_blob(work_path, doc)
     except Exception as e:
         print(f"⚠️ Failed to write metadata blob: {e}", file=sys.stderr)
+
+    if staged:
+        try:
+            if final_path.exists():
+                final_path.unlink()
+            work_path.rename(final_path)
+        except OSError as e:
+            print(f"⚠️ Failed to rename to final path: {e}", file=sys.stderr)
+            return work_path if work_path.exists() else None
 
     return final_path

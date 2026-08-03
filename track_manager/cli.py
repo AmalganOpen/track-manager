@@ -1473,6 +1473,99 @@ def show_metadata(file: str):
     show_full_metadata(Path(file))
 
 
+@cli.command(context_settings={"ignore_unknown_options": True})
+@click.argument("track")
+@click.argument("amount", type=float)
+@click.option(
+    "--absolute",
+    "-a",
+    is_flag=True,
+    help="Treat TRACK as a filesystem path instead of searching the library",
+)
+@click.option(
+    "--cents",
+    "-c",
+    "as_cents",
+    is_flag=True,
+    help="Interpret AMOUNT as cents instead of BPM percent",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be done without modifying the file",
+)
+def tune(
+    track: str,
+    amount: float,
+    absolute: bool,
+    as_cents: bool,
+    dry_run: bool,
+):
+    """Pitch-tune a track in place (pitch only; BPM/tempo unchanged).
+
+    Replaces the audio inside the original file (same path/name) and records
+    the tune in tags (title + TM_TUNING). By default AMOUNT is a BPM
+    percentage used only to compute the pitch interval; positive and negative
+    use inverse ratios so +p and -p cancel (e.g. ±5.946309% ≈ ±100 cents).
+    Pass -c to give AMOUNT in cents instead. Playback tempo/BPM is preserved.
+
+    Without -a, TRACK is a partial title/filename matched against the
+    configured output library; multiple hits open an interactive picker.
+
+    \b
+    Examples:
+      tm tune "midnight" 2.5
+      tm tune "midnight" -3
+      tm tune "midnight" 50 -c
+      tm tune ~/Music/track.aiff 2 -a
+    """
+    from . import audio as tm_audio
+    from . import tune as tm_tune
+
+    config = Config()
+    library_dir = config.output_dir
+
+    try:
+        src = tm_tune.resolve_track(track, absolute=absolute, library_dir=library_dir)
+    except FileNotFoundError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except ValueError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        click.echo("\n⚠️ Cancelled")
+        sys.exit(1)
+
+    if as_cents:
+        cents = amount
+        bpm_percent: Optional[float] = None
+    else:
+        try:
+            cents = tm_audio.bpm_percent_to_cents(amount)
+        except ValueError as e:
+            click.echo(f"❌ {e}", err=True)
+            sys.exit(1)
+        bpm_percent = amount
+
+    try:
+        tm_tune.tune_track(
+            src,
+            cents=cents,
+            bpm_percent=bpm_percent,
+            dry_run=dry_run,
+        )
+    except KeyboardInterrupt:
+        click.echo("\n⚠️ Tune cancelled by user")
+        sys.exit(1)
+    except tm_audio.EncodeError:
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
 @cli.command("completions")
 @click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
 @click.option(
