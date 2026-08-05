@@ -761,11 +761,11 @@ class Downloader:
         playlist_url: Optional[str] = None,
         check_duplicates: bool = False,
     ) -> bool:
-        """Try to download via the smart-download chain (Qobuz; TIDAL disabled).
+        """Try to download via the smart-download chain (HQ sources temporarily disabled).
 
         Args:
             url: Track URL (for ISRC lookup if needed)
-            format: Output format ('auto'/'aiff'/'m4a'/'mp3'); resolved here.
+            format: Output format ('auto'/'aiff'/'m4a'/'mp3'); resolved when HQ sources are enabled.
             isrc: Pre-fetched ISRC (optional)
             spotify_metadata: Pre-fetched Spotify metadata (optional)
             playlist_url: Playlist URL if downloading from a playlist
@@ -783,8 +783,6 @@ class Downloader:
         if self.dumb:
             return False
 
-        target_format = tm_audio.resolve_format(format)
-
         if isrc:
             print(f"🔍 Using ISRC from Spotify: {isrc}")
 
@@ -799,14 +797,15 @@ class Downloader:
         # the ISRC. The api pool is much more reliable than the streaming
         # pool, so this works even when TIDAL streaming hosts are all 502.
         # (Streaming downloads themselves are disabled below; this lookup is
-        # only to feed Qobuz an ISRC. If re-enabling _try_tidal_public,
-        # capture the track dict again as `prefetched_track`.)
+        # kept for dedup/upgrade identity. If re-enabling _try_qobuz_public
+        # or _try_tidal_public, it also feeds those sources an ISRC —
+        # capture the track dict again as `prefetched_track` for TIDAL.)
         if not isrc:
             isrc, _ = self._resolve_isrc_via_tidal(url)
 
         # Second chance: song.link → Spotify ISRC when Spotify API creds
-        # are configured. Helps when TIDAL /info/ is down but Qobuz still
-        # works — without an ISRC we would silently skip Qobuz entirely.
+        # are configured. Helps when TIDAL /info/ is down — without an ISRC
+        # we lose strong-identity dedup (and would skip Qobuz if re-enabled).
         if not isrc and self._has_spotify_credentials():
             looked_up, meta = self._lookup_isrc(url, self.detect_source(url))
             if looked_up:
@@ -825,22 +824,24 @@ class Downloader:
             if handled:
                 return True
 
-        # Smart-download chain (lossless first):
-        #   1) Qobuz public proxy — true 16/44.1 FLAC, requires ISRC.
-        #      Fast and reliable as long as qobuz2.kennyy.com.br is up.
+        # Smart-download chain (lossless first) — TEMPORARILY DISABLED.
+        #   1) Qobuz public proxy — DISABLED. qobuz2.kennyy.com.br is
+        #      degraded (preview/sample responses); re-enable when the
+        #      operator subscription recovers.
         #   2) TIDAL public hifi-api — DISABLED. The community streaming
         #      pool has been in a near-permanent OAuth blackout (every
         #      /track/ host 401/403/PREVIEW). Kept for re-enable if the
         #      ecosystem recovers; see docs/tidal-endpoints.md.
-        # Falls through to YouTube/SoundCloud/spotdl in the caller when Qobuz fails.
-        if self._try_qobuz_public(
-            url,
-            target_format,
-            spotify_metadata,
-            playlist_url=playlist_url,
-            isrc=isrc,
-        ):
-            return True
+        # Falls through to YouTube/SoundCloud/spotdl in the caller.
+        # target_format = tm_audio.resolve_format(format)
+        # if self._try_qobuz_public(
+        #     url,
+        #     target_format,
+        #     spotify_metadata,
+        #     playlist_url=playlist_url,
+        #     isrc=isrc,
+        # ):
+        #     return True
         # return self._try_tidal_public(
         #     url,
         #     target_format,
