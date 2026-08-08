@@ -53,6 +53,14 @@
         "reason": null,
         "flagged_at": null
     },
+    "processing": {
+        "padding": {
+            "pad_start_ms": 0,
+            "pad_end_ms": 0,
+            "threshold_beat": null,
+            "padded_at": null
+        }
+    },
     "user": {
         "tags": [],
         "rating": null,
