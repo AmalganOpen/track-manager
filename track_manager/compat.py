@@ -17,6 +17,11 @@ Explicitly unsupported: FLAC, Apple Lossless (ALAC), 32-bit float PCM,
 compressed AIFF-C (ALAW/uLaw/ADPCM), WAVE_FORMAT_EXTENSIBLE WAV headers,
 and any sample rate above 48 kHz.
 
+USB export also requires FAT16/FAT32/HFS+-safe filenames (NTFS is not
+supported on the NXS). Names with ``\\ / : * ? " < > |``, control characters,
+trailing dots/spaces, or a full path over 255 characters can copy fine on
+macOS but fail when rekordbox exports to a USB stick.
+
 The classifier is intentionally conservative: anything it cannot positively
 identify as supported is reported as incompatible/unknown so the user can
 eyeball it rather than have a track silently rejected on the gear.
@@ -33,6 +38,12 @@ from typing import NamedTuple, Optional
 # CDJ-2000NXS sample-rate ceiling for every format it accepts.
 _MAX_SAMPLE_RATE = 48000
 _VALID_PCM_RATES = {44100, 48000}
+
+# FAT32 / Windows / Pioneer USB filename rules. Matches ``sanitize_filename``
+# in metadata.py so check-compat and download naming stay aligned.
+_FAT_UNSAFE_CHARS = frozenset('\\/:*?"<>|')
+# Pioneer / PRO DJ LINK path ceiling commonly cited for CDJs.
+_MAX_PATH_CHARS = 255
 
 # Uncompressed integer PCM codecs ffprobe reports for WAV/AIFF. Float PCM
 # (pcm_f32*/pcm_f64*) and compressed AIFF-C codecs are deliberately absent.
@@ -119,13 +130,43 @@ def _codec_tag(stream: dict) -> Optional[int]:
         return None
 
 
-def classify(path: Path) -> CompatResult:
-    """Decide whether a CDJ-2000NXS can play ``path``.
+def classify_filename(name: str) -> Optional[str]:
+    """Return a FAT/USB filename incompatibility reason, or None if fine.
 
-    Decision is driven by the file's actual codec/sample-rate (via ffprobe),
-    not just its extension, so a mislabelled file is judged on its real
-    contents.
+    Checks the basename only (what lands on a flat rekordbox USB export).
+    Non-ASCII (Chinese, Japanese, etc.) is allowed — FAT32 LFN and HFS+
+    both support it; Pioneer USB export fails on the reserved ASCII set
+    and path length, not on Unicode.
     """
+    if not name or name in {".", ".."}:
+        return "empty or reserved filename"
+
+    issues: list[str] = []
+
+    illegal = sorted({c for c in name if c in _FAT_UNSAFE_CHARS})
+    if illegal:
+        shown = ", ".join(repr(c) for c in illegal)
+        issues.append(f"FAT-illegal character(s): {shown}")
+
+    controls = [c for c in name if ord(c) < 32]
+    if controls:
+        issues.append("contains control character(s)")
+
+    # Trailing space/dot are legal on APFS but rejected on FAT32/Windows.
+    stem_and_suffix = name
+    if stem_and_suffix.endswith(" ") or stem_and_suffix.endswith("."):
+        issues.append("trailing space or '.' (rejected by FAT32)")
+
+    if len(name) > _MAX_PATH_CHARS:
+        issues.append(f"filename length {len(name)} > {_MAX_PATH_CHARS} chars")
+
+    if not issues:
+        return None
+    return "; ".join(issues)
+
+
+def _classify_format(path: Path) -> CompatResult:
+    """Decide whether a CDJ-2000NXS can decode ``path`` (codec only)."""
     ext = path.suffix.lower()
 
     stream = _probe(path)
@@ -188,6 +229,28 @@ def classify(path: Path) -> CompatResult:
 
     return CompatResult(
         False, f"unrecognised format ({codec or ext or 'no extension'})", unknown=True
+    )
+
+
+def classify(path: Path) -> CompatResult:
+    """Decide whether a CDJ-2000NXS can play ``path`` on USB export.
+
+    Checks both the audio format (via ffprobe) and FAT/USB filename rules.
+    A mislabelled file is judged on its real codec contents; a format-OK
+    file with a FAT-illegal name is still reported incompatible.
+    """
+    format_result = _classify_format(path)
+    name_issue = classify_filename(path.name)
+
+    if name_issue is None:
+        return format_result
+
+    # Filename problems are hard known failures (USB copy / export will reject
+    # them), so they clear the ``unknown`` flag even when the codec probe failed.
+    if format_result.compatible:
+        return CompatResult(False, f"filename: {name_issue}")
+    return CompatResult(
+        False, f"{format_result.reason}; filename: {name_issue}", unknown=False
     )
 
 

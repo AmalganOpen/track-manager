@@ -69,6 +69,51 @@ def test_classify_missing_ffprobe_is_unknown(monkeypatch):
     assert result.unknown is True
 
 
+@pytest.mark.parametrize(
+    "name, expect_issue",
+    [
+        ("Artist - Title.aiff", False),
+        ("周杰伦 - 晴天.aiff", False),
+        ("Artist - Song: Remix.aiff", True),
+        ("AC/DC - Thunderstruck.aiff", True),
+        ('Track "Live".aiff', True),
+        ("Song*.aiff", True),
+        ("bad\x00name.aiff", True),
+        ("trailing.aiff.", True),
+        ("trailing.aiff ", True),
+        ("a" * 256 + ".aiff", True),
+        ("a" * 250 + ".aiff", False),
+    ],
+)
+def test_classify_filename(name, expect_issue):
+    issue = compat.classify_filename(name)
+    assert (issue is not None) is expect_issue
+
+
+def test_classify_rejects_fat_illegal_name_even_when_format_ok(monkeypatch):
+    result = _classify(
+        monkeypatch,
+        "Song: Remix.aiff",
+        {"codec_name": "pcm_s16be", "sample_rate": "44100"},
+    )
+    assert result.compatible is False
+    assert result.unknown is False
+    assert "filename:" in result.reason
+    assert ":" in result.reason
+
+
+def test_classify_combines_format_and_filename_issues(monkeypatch):
+    result = _classify(
+        monkeypatch,
+        "Song: Remix.flac",
+        {"codec_name": "flac", "sample_rate": "44100"},
+    )
+    assert result.compatible is False
+    assert result.unknown is False
+    assert "FLAC" in result.reason
+    assert "filename:" in result.reason
+
+
 def test_target_aiff_path_backup_resolves_to_library_root():
     library = Path("/lib")
     backup_track = library / BACKUP_DIRNAME / "Artist - Title.m4a"
