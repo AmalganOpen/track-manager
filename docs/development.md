@@ -42,6 +42,9 @@ track-manager/
 │   ├── songlink.py      # song.link / ISRC resolution
 │   ├── tidal_public.py  # TIDAL public API
 │   ├── audio.py         # Encoding, probing, ffmpeg helpers
+│   ├── tune.py          # In-place pitch tune
+│   ├── pad.py           # Bar-boundary pad (Rekordbox beat grid)
+│   ├── check_tuning.py  # Tuning / key estimation
 │   └── config.py        # YAML configuration
 ├── tests/
 │   ├── unit/            # Fast, isolated tests (CI matrix)
@@ -64,6 +67,7 @@ Downloads follow a quality-first pipeline:
 
 Deep dives:
 
+
 | Topic                  | Document                                                                       |
 | ---------------------- | ------------------------------------------------------------------------------ |
 | Full download flow     | [download-process.md](download-process.md)                                     |
@@ -71,6 +75,7 @@ Deep dives:
 | CLI output conventions | [cli-style-guide.md](cli-style-guide.md)                                       |
 | Track quality metadata | [track-quality.md](track-quality.md)                                           |
 | TIDAL API endpoints    | [tidal-endpoints.md](tidal-endpoints.md)                                       |
+
 
 When adding CLI output, follow [cli-style-guide.md](cli-style-guide.md) (emoji set, spacing, message categories).
 
@@ -109,6 +114,8 @@ black --check track_manager/ tests/
 isort --check-only --profile black track_manager/ tests/
 ```
 
+
+
 ### Pre-commit
 
 ```bash
@@ -123,12 +130,14 @@ Hooks mirror CI: black and isort on Python files.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on pushes to `main`/`develop` and PRs to `main`:
 
+
 | Job             | What it does                                       |
 | --------------- | -------------------------------------------------- |
 | **test**        | Unit tests on Python 3.10, 3.11, 3.12              |
 | **integration** | Integration tests on 3.12                          |
 | **lint**        | `black --check`, `isort --check-only`, bandit scan |
 | **build**       | `python -m build` + `twine check`                  |
+
 
 Run the same checks locally before opening a PR:
 
@@ -140,6 +149,8 @@ isort --check-only --profile black track_manager/ tests/
 python -m build
 ```
 
+
+
 ## Contributing
 
 1. Branch from `main` (use descriptive branch names, e.g. `feat/retry-failed-dry-run`).
@@ -148,4 +159,5 @@ python -m build
 4. Run formatters and tests locally (or rely on pre-commit).
 5. Open a PR against `main` — CI must pass.
 
-Do not commit `config.yaml`, credentials, or generated artifacts (`htmlcov/`, `dist/`, `.coverage`).
+Do not commit `config.yaml`, credentials, or generated artifacts (`htmlcov/`, `dist/`, `.coverage`). 
+

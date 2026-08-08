@@ -12,6 +12,7 @@ Universal music downloader with smart duplicate detection and metadata managemen
 - 📊 **Playlist Support** - YouTube, SoundCloud, and Spotify playlists (Spotify requires API credentials)
 - 🔄 **Error Resilience** - Logs failed downloads, continues on errors
 - 🎚️ **Best Quality** - Lossless FLAC (16-bit/44.1kHz) when available, converted to M4A 256kbps
+- 🎛️ **DJ library tools** - In-place pitch tune, bar-boundary pad from the Rekordbox grid, tuning checks
 - 🌍 **Cross-Platform** - Works on macOS, Linux, Windows
 
 ## How It Works
@@ -162,6 +163,14 @@ tm tune "midnight" -3           # -3% (inverse of +3%)
 tm tune "midnight" 50 -c        # +50 cents
 tm tune ~/Music/track.aiff 2 -a # absolute filesystem path
 
+# Pad to bar boundaries using the Rekordbox beat grid (Rekordbox must be quit)
+tm pad "midnight"               # pad start/end onto the "1" when past the "3"
+tm pad "midnight" -n            # dry-run: show the plan only
+tm pad "drop" --no-start        # end pad only
+tm pad "outro" --end-tail silence   # dry silence instead of quiet reverb wash
+tm pad "midnight" --undo        # reverse recorded pads
+# Prefer AIFF — padding M4A/MP3 re-encodes the whole file
+
 # Estimate tuning vs A440
 tm check-tuning "stayed together"
 tm check-tuning ~/Music/track.aiff -a
@@ -170,6 +179,7 @@ tm check-tuning "drop" --offset 90 --duration 20 --key-scope window --key-source
 
 # Get help
 track-manager --help
+tm pad --help
 ```
 
 ## Audio Quality
@@ -307,6 +317,20 @@ Get credentials from: https://developer.spotify.com/dashboard
 - Ensure files have proper ID3/M4A tags
 - Use `track-manager apply-metadata` to fix metadata first
 - Duplicate detection compares artist + title from tags, not filenames
+
+### Pad / Rekordbox
+
+**Problem:** `tm pad` refuses to run or DB writes fail
+
+**Solution:** Quit Rekordbox completely (including background agents if needed), then retry. Pad shifts ANLZ/cue times for start pads — do **not** re-analyse the track afterward or loops and cues will drift.
+
+**Problem:** End pad sounds empty / too wet
+
+**Solution:** Default end fill is a quiet pad-only reverb wash (`--end-tail reverb`). Use `--end-tail silence` for dry silence. The original body is never faded.
+
+**Problem:** Worried about lossy re-encode
+
+**Solution:** Prefer AIFF (`tm migrate-to-aiff`). Padding M4A/MP3 re-encodes the whole file. Use `tm pad … -n` to preview without writing.
 
 ### Installation Issues
 

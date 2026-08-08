@@ -1693,7 +1693,10 @@ def tune(
         sys.exit(1)
 
 
-@cli.command("pad")
+@cli.command(
+    "pad",
+    short_help="Pad a track to bar boundaries (Rekordbox beat grid)",
+)
 @click.argument("track")
 @click.option(
     "--absolute",
@@ -1707,13 +1710,16 @@ def tune(
     type=click.IntRange(1, 4),
     default=3,
     show_default=True,
-    help='Only pad when phase is on/past this beat count (default: the "3")',
+    help=(
+        "Only pad when phase is on/past this beat in the bar "
+        '(1–4; default pads on/past the "3")'
+    ),
 )
 @click.option(
     "--start/--no-start",
     default=True,
     show_default=True,
-    help='Pad the start so the file opens on a "1"',
+    help='Pad the start so the file opens on a "1" (shifts grid/cues)',
 )
 @click.option(
     "--end/--no-end",
@@ -1727,20 +1733,20 @@ def tune(
     default="reverb",
     show_default=True,
     help=(
-        "End-pad fill only: quiet reverb wash in the padded region "
-        "(body untouched), or dry silence"
+        "What fills the end pad only: quiet reverb wash "
+        "(body untouched) or dry silence"
     ),
 )
 @click.option(
     "--undo",
     is_flag=True,
-    help="Remove previously recorded pads (from TM_PAD / metadata)",
+    help="Remove cumulative pads recorded in TM_PAD / metadata",
 )
 @click.option(
     "--dry-run",
     "-n",
     is_flag=True,
-    help="Show what would be done without modifying files or the DB",
+    help="Show the plan without modifying files or the DB",
 )
 @click.option(
     "--no-backup",
@@ -1760,19 +1766,19 @@ def pad(
 ):
     """Pad a track to bar boundaries using the Rekordbox beat grid.
 
-    If the file starts or ends on/past the threshold beat (default: the
-    \"3\"), silence is added so it opens on a \"1\" and/or finishes on the
-    next \"1\". Start pads shift ANLZ + cue times by the same amount — no
-    re-analysis — so loop lengths stay consistent.
+    When the file starts or ends on/past the threshold beat (default: the
+    "3"), silence is added so it opens on a "1" and/or finishes on the next
+    "1". Start pads shift ANLZ analysis and cue times by the same amount —
+    do not re-analyse in Rekordbox afterward, or loops and cues will drift.
 
-    End pads default to a quiet pad-only reverb wash (``--end-tail reverb``);
-    the original body is not faded. Use ``--end-tail silence`` for dry silence.
+    End pads leave the original audio body untouched. By default only the
+    padded region is filled with a quiet reverb wash (--end-tail reverb);
+    use --end-tail silence for dry silence.
 
-    Pass ``--undo`` to reverse cumulative pads recorded in ``TM_PAD``.
-
-    Rekordbox must be fully quit. Without -a, TRACK is matched against the
-    library like ``tune``. Warns when padding M4A/MP3 (whole-file lossy
-    re-encode); AIFF is preferred.
+    Pads are recorded in TM_PAD / metadata (cumulative). Use --undo to
+    reverse them. Rekordbox must be fully quit. Without -a, TRACK is a
+    partial title/filename matched against the library (same picker as
+    tune). Prefer AIFF: padding M4A/MP3 re-encodes the whole file.
 
     \b
     Examples:
