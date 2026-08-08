@@ -69,6 +69,18 @@ def tune_track(
         print(f"🎚️ Tune: {cents:+.2f} cents " f"(ratio {ratio:.6f}, BPM unchanged)")
     print("📁 In-place (same file, tags updated)")
 
+    # Warn only — retuning stacks pitch-shift artifacts on already-processed audio.
+    from .check_tuning import read_recorded_tuning_label
+
+    prior = read_recorded_tuning_label(src)
+    if prior:
+        print(
+            f"⚠️ Already tuned ({prior}). Another pass stacks artifacts on "
+            f"the current audio — prefer restoring/redownloading a clean "
+            f"copy first.",
+            file=sys.stderr,
+        )
+
     if dry_run:
         print("ℹ️ Dry run — no file written")
         return src

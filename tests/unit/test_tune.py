@@ -252,6 +252,28 @@ def test_tune_track_in_place(tmp_path: Path) -> None:
     assert blob["track"]["album"] == "Album"
 
 
+def test_tune_track_warns_if_already_tuned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    src = tmp_path / "Artist - Song.aiff"
+    src.write_bytes(b"x")
+
+    monkeypatch.setattr(
+        "track_manager.check_tuning.read_recorded_tuning_label",
+        lambda _p: "+12.00 cents",
+    )
+    monkeypatch.setattr(tm_audio, "format_from_path", lambda _p: "aiff")
+    monkeypatch.setattr(tm_audio, "cents_to_ratio", lambda c: 1.0)
+
+    result = tm_tune.tune_track(src, cents=12.0, dry_run=True)
+    assert result == src
+    err = capsys.readouterr().err
+    assert "Already tuned (+12.00 cents)" in err
+    assert "stacks artifacts" in err
+
+
 def test_pitch_filter_keeps_tempo(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tm_audio, "_HAS_RUBBERBAND", True)
     af = tm_audio._pitch_filter(100.0, 44100)
