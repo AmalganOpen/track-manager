@@ -361,6 +361,10 @@ def check_compat(output: Optional[str], scan_all: bool):
     48 kHz; FLAC, Apple Lossless, 32-bit float, compressed AIFF-C, and
     WAVE_FORMAT_EXTENSIBLE WAVs are all rejected.
 
+    Also flags FAT/USB-unsafe filenames (\\ / : * ? " < > |, control chars,
+    trailing space/dot, names over 255 chars) that break rekordbox USB export
+    even when the audio codec itself is fine.
+
     By default this scans the configured library directory on disk (fast, no
     database lock). Pass --all to instead audit every track in Rekordbox's
     master.db, which mirrors what the "export to device" popup checks.
@@ -1473,6 +1477,126 @@ def show_metadata(file: str):
     show_full_metadata(Path(file))
 
 
+@cli.command("check-tuning")
+@click.argument("track")
+@click.option(
+    "--absolute",
+    "-a",
+    is_flag=True,
+    help="Treat TRACK as a filesystem path instead of searching the library",
+)
+@click.option(
+    "--threshold",
+    "-t",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Cents from A440 within which a track is considered in tune",
+)
+@click.option(
+    "--duration",
+    type=float,
+    default=45.0,
+    show_default=True,
+    help="Seconds of audio to analyse",
+)
+@click.option(
+    "--offset",
+    type=float,
+    default=None,
+    help="Start offset in seconds (default: auto, past typical intros)",
+)
+@click.option(
+    "--random",
+    "-r",
+    "random_offset",
+    is_flag=True,
+    help="Analyse a random window instead of the default intro-skip offset",
+)
+@click.option(
+    "--key-source",
+    type=click.Choice(["auto", "tag", "estimated"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+    help="Which key to use for target-key projections: file tag, audio estimate, "
+    "or auto (tag if present)",
+)
+@click.option(
+    "--key-scope",
+    type=click.Choice(["stable", "window"], case_sensitive=False),
+    default="stable",
+    show_default=True,
+    help="Where estimated chroma/key comes from: multi-window average across "
+    "the track (stable), or the same --offset/--duration/-r slice (window)",
+)
+def check_tuning(
+    track: str,
+    absolute: bool,
+    threshold: float,
+    duration: float,
+    offset: Optional[float],
+    random_offset: bool,
+    key_source: str,
+    key_scope: str,
+):
+    """Estimate whether a track is sharp/flat vs A440.
+
+    Reports global tuning offset in cents. Without -a, TRACK is a partial
+    title/filename matched against the configured output library (same picker
+    as ``tune``).
+
+    \b
+    Examples:
+      tm check-tuning "stayed together"
+      tm check-tuning ~/Music/track.aiff -a
+      tm check-tuning "midnight" -t 8
+      tm check-tuning "nanana" -r
+      tm check-tuning "racks" --key-source estimated
+      tm check-tuning "drop" --offset 90 --duration 20 --key-scope window
+    """
+    from . import check_tuning as tm_check
+    from . import library as tm_library
+
+    config = Config()
+    library_dir = config.output_dir
+
+    if offset is not None and random_offset:
+        click.echo("❌ Use either --offset or --random, not both", err=True)
+        sys.exit(1)
+
+    try:
+        src = tm_library.resolve_track(
+            track, absolute=absolute, library_dir=library_dir
+        )
+    except FileNotFoundError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except ValueError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        click.echo("\n⚠️ Cancelled")
+        sys.exit(1)
+
+    try:
+        estimate = tm_check.estimate_tuning_cents(
+            src,
+            duration=duration,
+            offset=offset,
+            random_offset=random_offset,
+            key_source=key_source.lower(),
+            key_scope=key_scope.lower(),
+        )
+    except tm_check.TuningAnalysisError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+    tm_check.report_tuning(estimate, threshold_cents=threshold)
+
+
 @cli.command(context_settings={"ignore_unknown_options": True})
 @click.argument("track")
 @click.argument("amount", type=float)
@@ -1521,13 +1645,16 @@ def tune(
       tm tune ~/Music/track.aiff 2 -a
     """
     from . import audio as tm_audio
+    from . import library as tm_library
     from . import tune as tm_tune
 
     config = Config()
     library_dir = config.output_dir
 
     try:
-        src = tm_tune.resolve_track(track, absolute=absolute, library_dir=library_dir)
+        src = tm_library.resolve_track(
+            track, absolute=absolute, library_dir=library_dir
+        )
     except FileNotFoundError as e:
         click.echo(f"❌ {e}", err=True)
         sys.exit(1)
@@ -1560,6 +1687,149 @@ def tune(
         click.echo("\n⚠️ Tune cancelled by user")
         sys.exit(1)
     except tm_audio.EncodeError:
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("pad")
+@click.argument("track")
+@click.option(
+    "--absolute",
+    "-a",
+    is_flag=True,
+    help="Treat TRACK as a filesystem path instead of searching the library",
+)
+@click.option(
+    "--threshold",
+    "-t",
+    type=click.IntRange(1, 4),
+    default=3,
+    show_default=True,
+    help='Only pad when phase is on/past this beat count (default: the "3")',
+)
+@click.option(
+    "--start/--no-start",
+    default=True,
+    show_default=True,
+    help='Pad the start so the file opens on a "1"',
+)
+@click.option(
+    "--end/--no-end",
+    default=True,
+    show_default=True,
+    help='Pad the end so the file closes on a "1"',
+)
+@click.option(
+    "--end-tail",
+    type=click.Choice(["reverb", "silence"], case_sensitive=False),
+    default="reverb",
+    show_default=True,
+    help=(
+        "End-pad fill only: quiet reverb wash in the padded region "
+        "(body untouched), or dry silence"
+    ),
+)
+@click.option(
+    "--undo",
+    is_flag=True,
+    help="Remove previously recorded pads (from TM_PAD / metadata)",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would be done without modifying files or the DB",
+)
+@click.option(
+    "--no-backup",
+    is_flag=True,
+    help="Skip the timestamped master.db backup before writing",
+)
+def pad(
+    track: str,
+    absolute: bool,
+    threshold: int,
+    start: bool,
+    end: bool,
+    end_tail: str,
+    undo: bool,
+    dry_run: bool,
+    no_backup: bool,
+):
+    """Pad a track to bar boundaries using the Rekordbox beat grid.
+
+    If the file starts or ends on/past the threshold beat (default: the
+    \"3\"), silence is added so it opens on a \"1\" and/or finishes on the
+    next \"1\". Start pads shift ANLZ + cue times by the same amount — no
+    re-analysis — so loop lengths stay consistent.
+
+    End pads default to a quiet pad-only reverb wash (``--end-tail reverb``);
+    the original body is not faded. Use ``--end-tail silence`` for dry silence.
+
+    Pass ``--undo`` to reverse cumulative pads recorded in ``TM_PAD``.
+
+    Rekordbox must be fully quit. Without -a, TRACK is matched against the
+    library like ``tune``. Warns when padding M4A/MP3 (whole-file lossy
+    re-encode); AIFF is preferred.
+
+    \b
+    Examples:
+      tm pad "midnight"
+      tm pad "midnight" -n
+      tm pad ~/Music/track.aiff -a
+      tm pad "drop" --no-start
+      tm pad "outro" -t 4
+      tm pad "outro" --end-tail silence
+      tm pad "midnight" --undo
+    """
+    from . import library as tm_library
+    from . import pad as tm_pad
+
+    if not undo and not start and not end:
+        click.echo("❌ Pass at least one of --start / --end", err=True)
+        sys.exit(1)
+
+    config = Config()
+    library_dir = config.output_dir
+
+    try:
+        src = tm_library.resolve_track(
+            track, absolute=absolute, library_dir=library_dir
+        )
+    except FileNotFoundError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except ValueError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        click.echo("\n⚠️ Cancelled")
+        sys.exit(1)
+
+    try:
+        if undo:
+            tm_pad.unpad_track(
+                src,
+                dry_run=dry_run,
+                backup_db=not no_backup,
+            )
+        else:
+            tm_pad.pad_track(
+                src,
+                threshold_beat=threshold,
+                pad_start=start,
+                pad_end=end,
+                end_tail=end_tail.lower(),  # type: ignore[arg-type]
+                dry_run=dry_run,
+                backup_db=not no_backup,
+            )
+    except KeyboardInterrupt:
+        click.echo("\n⚠️ Pad cancelled by user")
+        sys.exit(1)
+    except tm_pad.PadError as e:
+        click.echo(f"❌ {e}", err=True)
         sys.exit(1)
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
