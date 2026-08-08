@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from track_manager import audio as tm_audio
+from track_manager import library as tm_library
 from track_manager import tune as tm_tune
 
 
@@ -46,7 +47,7 @@ def test_find_matching_tracks_partial_title(tmp_path: Path) -> None:
     (tmp_path / "Other - Midnight Run.m4a").write_bytes(b"x")
     (tmp_path / "readme.txt").write_text("nope")
 
-    matches = tm_tune.find_matching_tracks("midnight", tmp_path)
+    matches = tm_library.find_matching_tracks("midnight", tmp_path)
     names = {p.name for p in matches}
     assert names == {
         "Artist - Midnight City.aiff",
@@ -56,14 +57,14 @@ def test_find_matching_tracks_partial_title(tmp_path: Path) -> None:
 
 def test_find_matching_tracks_case_insensitive(tmp_path: Path) -> None:
     (tmp_path / "Foo - Bar.aiff").write_bytes(b"x")
-    matches = tm_tune.find_matching_tracks("BAR", tmp_path)
+    matches = tm_library.find_matching_tracks("BAR", tmp_path)
     assert len(matches) == 1
 
 
 def test_pick_track_single_auto_selects(tmp_path: Path) -> None:
     path = tmp_path / "only.aiff"
     path.write_bytes(b"x")
-    assert tm_tune.pick_track([path]) == path
+    assert tm_library.pick_track([path]) == path
 
 
 def test_pick_track_interactive(
@@ -74,19 +75,19 @@ def test_pick_track_interactive(
     a.write_bytes(b"x")
     b.write_bytes(b"x")
     monkeypatch.setattr("builtins.input", lambda _: "2")
-    assert tm_tune.pick_track([a, b]) == b
+    assert tm_library.pick_track([a, b]) == b
 
 
 def test_resolve_track_absolute(tmp_path: Path) -> None:
     path = tmp_path / "track.aiff"
     path.write_bytes(b"x")
-    got = tm_tune.resolve_track(str(path), absolute=True, library_dir=tmp_path)
+    got = tm_library.resolve_track(str(path), absolute=True, library_dir=tmp_path)
     assert got == path.resolve()
 
 
 def test_resolve_track_absolute_missing(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
-        tm_tune.resolve_track(
+        tm_library.resolve_track(
             str(tmp_path / "nope.aiff"), absolute=True, library_dir=tmp_path
         )
 
@@ -256,6 +257,10 @@ def test_pitch_filter_keeps_tempo(monkeypatch: pytest.MonkeyPatch) -> None:
     af = tm_audio._pitch_filter(100.0, 44100)
     assert af.startswith("rubberband=pitch=")
     assert "tempo=1" in af
+    assert "pitchq=quality" in af
+    assert "transients=crisp" in af
+    assert "window=standard" in af
+    assert "channels=together" in af
 
     monkeypatch.setattr(tm_audio, "_HAS_RUBBERBAND", False)
     af = tm_audio._pitch_filter(100.0, 44100)
@@ -312,7 +317,7 @@ def test_cli_accepts_negative_bpm_amount(monkeypatch: pytest.MonkeyPatch) -> Non
         calls.append({"src": src, **kwargs})
         return src
 
-    monkeypatch.setattr("track_manager.tune.resolve_track", fake_resolve)
+    monkeypatch.setattr("track_manager.library.resolve_track", fake_resolve)
     monkeypatch.setattr("track_manager.tune.tune_track", fake_tune)
 
     class _Cfg:

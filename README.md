@@ -162,6 +162,12 @@ tm tune "midnight" -3           # -3% (inverse of +3%)
 tm tune "midnight" 50 -c        # +50 cents
 tm tune ~/Music/track.aiff 2 -a # absolute filesystem path
 
+# Estimate tuning vs A440
+tm check-tuning "stayed together"
+tm check-tuning ~/Music/track.aiff -a
+# Key/chroma from one slice only (default averages several windows):
+tm check-tuning "drop" --offset 90 --duration 20 --key-scope window --key-source estimated
+
 # Get help
 track-manager --help
 ```

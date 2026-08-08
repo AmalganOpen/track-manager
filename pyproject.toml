@@ -34,6 +34,8 @@ dependencies = [
     "click>=8.1.0",
     # Rekordbox database access (SQLCipher-encrypted master.db).
     "pyrekordbox>=0.4.0",
+    # Tuning analysis (check-tuning).
+    "librosa>=0.10.0",
 ]
 
 [project.optional-dependencies]

@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from mutagen.aiff import AIFF
 from mutagen.id3 import (
@@ -438,6 +439,15 @@ def bpm_percent_to_cents(percent: float) -> float:
     return 1200.0 * math.log2(ratio)
 
 
+def cents_to_bpm_percent(cents: float) -> float:
+    """Inverse of ``bpm_percent_to_cents`` (Rekordbox-style pitch %)."""
+    ratio = cents_to_ratio(cents)
+    if cents >= 0:
+        return (ratio - 1.0) * 100.0
+    # ratio = 1/(1+|p|/100)  →  |p| = 100*(1/ratio - 1)
+    return -100.0 * (1.0 / ratio - 1.0)
+
+
 def cents_to_ratio(cents: float) -> float:
     """Convert cents to a frequency/tempo scale factor."""
     return 2.0 ** (cents / 1200.0)
@@ -520,6 +530,8 @@ def copy_all_tags(src: Path, dst: Path) -> None:
 
 _TUNING_TXXX_DESC = "TM_TUNING"
 _TUNING_M4A_ATOM = "----:com.tm:tuning"
+_PAD_TXXX_DESC = "TM_PAD"
+_PAD_M4A_ATOM = "----:com.tm:pad"
 
 
 def apply_tuning_tags(path: Path, *, title: str, tuning_label: str) -> None:
@@ -555,6 +567,132 @@ def apply_tuning_tags(path: Path, *, title: str, tuning_label: str) -> None:
         return
 
     raise ValueError(f"Unsupported format for tuning tags: {suffix!r}")
+
+
+def format_pad_label(*, pad_start_seconds: float, pad_end_seconds: float) -> str:
+    """Human/machine label for cumulative silence pads (e.g. for ``TM_PAD``)."""
+    return (
+        f"start={pad_start_seconds * 1000:.1f}ms " f"end={pad_end_seconds * 1000:.1f}ms"
+    )
+
+
+def parse_pad_label(label: str) -> Optional[tuple[float, float]]:
+    """Parse ``TM_PAD`` text into ``(pad_start_seconds, pad_end_seconds)``.
+
+    Returns None if the label cannot be parsed.
+    """
+    text = (label or "").strip()
+    if not text:
+        return None
+    start_m = re.search(r"start\s*=\s*([+-]?\d+(?:\.\d+)?)\s*ms", text, re.I)
+    end_m = re.search(r"end\s*=\s*([+-]?\d+(?:\.\d+)?)\s*ms", text, re.I)
+    if not start_m or not end_m:
+        return None
+    try:
+        start_ms = float(start_m.group(1))
+        end_ms = float(end_m.group(1))
+    except ValueError:
+        return None
+    return (start_ms / 1000.0, end_ms / 1000.0)
+
+
+def read_recorded_pad(path: Path) -> Optional[tuple[float, float]]:
+    """Return cumulative ``(pad_start_seconds, pad_end_seconds)`` from tags, if any.
+
+    Accepts legacy ``TM_EXTEND`` / ``com.tm:extend`` written by earlier builds.
+    """
+    suffix = path.suffix.lower()
+    legacy_desc = "TM_EXTEND"
+    legacy_atom = "----:com.tm:extend"
+    try:
+        if suffix in (".aiff", ".aif", ".mp3"):
+            audio = AIFF(str(path)) if suffix in (".aiff", ".aif") else MP3(str(path))
+            tags = audio.tags
+            if not tags:
+                return None
+            for frame in tags.getall("TXXX"):
+                desc = getattr(frame, "desc", None)
+                if desc in (_PAD_TXXX_DESC, legacy_desc) and frame.text:
+                    return parse_pad_label(str(frame.text[0]))
+            return None
+        if suffix in (".m4a", ".mp4"):
+            audio = MP4(str(path))
+            tags = audio.tags
+            if not tags:
+                return None
+            raw = tags.get(_PAD_M4A_ATOM) or tags.get(legacy_atom)
+            if not raw:
+                return None
+            payload = raw[0] if isinstance(raw, list) else raw
+            if isinstance(payload, (bytes, bytearray)):
+                text = bytes(payload).decode("utf-8", errors="replace")
+            else:
+                text = str(payload)
+            return parse_pad_label(text)
+    except Exception:
+        return None
+    return None
+
+
+def apply_pad_tags(path: Path, *, pad_label: str) -> None:
+    """Write cumulative pad info as ``TM_PAD`` (does not change title)."""
+    suffix = path.suffix.lower()
+    if suffix in (".aiff", ".aif", ".mp3"):
+        audio = AIFF(str(path)) if suffix in (".aiff", ".aif") else MP3(str(path))
+        if audio.tags is None:
+            audio.add_tags()
+        assert audio.tags is not None
+        for frame in list(audio.tags.getall("TXXX")):
+            if getattr(frame, "desc", None) == _PAD_TXXX_DESC:
+                audio.tags.delall(frame.HashKey)
+        audio.tags.add(TXXX(encoding=3, desc=_PAD_TXXX_DESC, text=[pad_label]))
+        audio.save()
+        return
+
+    if suffix in (".m4a", ".mp4"):
+        audio = MP4(str(path))
+        if audio.tags is None:
+            audio.add_tags()
+        assert audio.tags is not None
+        audio.tags[_PAD_M4A_ATOM] = [pad_label.encode("utf-8")]
+        audio.save()
+        return
+
+    raise ValueError(f"Unsupported format for pad tags: {suffix!r}")
+
+
+def clear_pad_tags(path: Path) -> None:
+    """Remove ``TM_PAD`` (and legacy ``TM_EXTEND``) from the file's tags."""
+    suffix = path.suffix.lower()
+    legacy_desc = "TM_EXTEND"
+    legacy_atom = "----:com.tm:extend"
+    if suffix in (".aiff", ".aif", ".mp3"):
+        audio = AIFF(str(path)) if suffix in (".aiff", ".aif") else MP3(str(path))
+        if not audio.tags:
+            return
+        changed = False
+        for frame in list(audio.tags.getall("TXXX")):
+            if getattr(frame, "desc", None) in (_PAD_TXXX_DESC, legacy_desc):
+                audio.tags.delall(frame.HashKey)
+                changed = True
+        if changed:
+            audio.save()
+        return
+
+    if suffix in (".m4a", ".mp4"):
+        audio = MP4(str(path))
+        if not audio.tags:
+            return
+        changed = False
+        for key in (_PAD_M4A_ATOM, legacy_atom):
+            if key in audio.tags:
+                del audio.tags[key]
+                changed = True
+        if changed:
+            audio.save()
+        return
+
+    raise ValueError(f"Unsupported format for pad tags: {suffix!r}")
 
 
 _HAS_RUBBERBAND: Optional[bool] = None
@@ -603,10 +741,21 @@ def _pitch_filter(cents: float, sample_rate: int) -> str:
     Prefers ``rubberband`` (pitch only, tempo=1). Falls back to
     ``asetrate`` + ``aresample`` + compensating ``atempo`` when rubberband
     is unavailable.
+
+    Rubberband defaults to ``pitchq=speed`` (fast/cheaper). We force
+    ``pitchq=quality`` and ``channels=together`` (stereo coherence), but
+    keep rubberband's own ``transients=crisp`` / ``window=standard`` —
+    ``smooth``+``long`` smears kicks/hats and sounds worse on club material
+    even though pitch may look "cleaner". Stacking in-place tunes still
+    compounds artifacts.
     """
     ratio = cents_to_ratio(cents)
     if _ffmpeg_has_rubberband():
-        return f"rubberband=pitch={ratio:.10f}:tempo=1"
+        return (
+            f"rubberband=pitch={ratio:.10f}:tempo=1:"
+            f"pitchq=quality:transients=crisp:window=standard:"
+            f"channels=together"
+        )
 
     # asetrate changes pitch+tempo together; atempo=1/ratio restores duration.
     return (
@@ -614,6 +763,318 @@ def _pitch_filter(cents: float, sample_rate: int) -> str:
         f"aresample={sample_rate},"
         f"{_atempo_chain(1.0 / ratio)}"
     )
+
+
+# End-pad fill: keep the original body untouched; only invent audio in the pad.
+EndTailMode = Literal["reverb", "silence"]
+PAD_END_TAIL_DEFAULT: EndTailMode = "reverb"
+# Ending slice fed into aecho (read-only source for the pad).
+_PAD_END_TAIL_SOURCE_SECONDS = 0.40
+# Quiet wet level so the pad is glue, not a new outro.
+_PAD_END_TAIL_WET = 0.32
+# Tiny pad-side fade-in to avoid a click at the join (does not touch body).
+_PAD_END_TAIL_FADE_IN_SECONDS = 0.004
+# Multi-tap aecho ≈ short room wash (in_gain:out_gain:delays:decays).
+_PAD_END_TAIL_AECHO = (
+    "0.75:0.35:"
+    "20|40|65|95|130|175|230|300|400|520:"
+    "0.5|0.42|0.35|0.28|0.22|0.18|0.14|0.1|0.07|0.04"
+)
+
+
+def _adelay_filter(pad_start_seconds: float, channels: Optional[int]) -> str:
+    delay_ms = max(1, int(round(pad_start_seconds * 1000.0)))
+    if channels and channels > 1:
+        delays = "|".join([str(delay_ms)] * channels)
+    else:
+        delays = str(delay_ms)
+    return f"adelay={delays}:all=1"
+
+
+def build_pad_end_reverb_filter_complex(
+    *,
+    orig_duration: float,
+    pad_start_seconds: float,
+    pad_end_seconds: float,
+    channels: Optional[int],
+    source_seconds: float = _PAD_END_TAIL_SOURCE_SECONDS,
+    wet: float = _PAD_END_TAIL_WET,
+    fade_in_seconds: float = _PAD_END_TAIL_FADE_IN_SECONDS,
+    aecho: str = _PAD_END_TAIL_AECHO,
+) -> str:
+    """Build a filter_complex that pads the end with a wet-only reverb tail.
+
+    The body (and optional start silence) is left dry; only the appended
+    ``pad_end_seconds`` region contains the generated wash.
+    """
+    if orig_duration <= 0:
+        raise ValueError("orig_duration must be > 0 for reverb end tail")
+    if pad_end_seconds <= 0:
+        raise ValueError("pad_end_seconds must be > 0 for reverb end tail")
+
+    src_len = min(max(source_seconds, 0.05), orig_duration)
+    trim_start = max(0.0, orig_duration - src_len)
+    fade_in = min(max(fade_in_seconds, 0.0), pad_end_seconds * 0.25)
+    # Fade the pad itself so it's gone by the next "1".
+    fade_out_d = max(pad_end_seconds * 0.75, pad_end_seconds - fade_in)
+    fade_out_st = max(0.0, pad_end_seconds - fade_out_d)
+    wet_g = max(0.0, min(float(wet), 1.0))
+
+    body_chain = (
+        _adelay_filter(pad_start_seconds, channels)
+        if pad_start_seconds > 0
+        else "anull"
+    )
+
+    # Feed ending slice → silence of pad length → aecho (rings into silence) →
+    # keep only the pad region → quiet + pad-side fades.
+    return (
+        f"[0:a]asplit=2[bodyin][tailin];"
+        f"[bodyin]{body_chain}[body];"
+        f"[tailin]atrim=start={trim_start:.10f}:end={orig_duration:.10f},"
+        f"asetpts=PTS-STARTPTS,"
+        f"apad=pad_dur={pad_end_seconds:.10f},"
+        f"aecho={aecho},"
+        f"atrim=start={src_len:.10f}:duration={pad_end_seconds:.10f},"
+        f"asetpts=PTS-STARTPTS,"
+        f"volume={wet_g:.4f},"
+        f"afade=t=in:d={fade_in:.10f},"
+        f"afade=t=out:st={fade_out_st:.10f}:d={fade_out_d:.10f}[pad];"
+        f"[body][pad]concat=n=2:v=0:a=1[out]"
+    )
+
+
+def pad_silence_to(
+    src: Path,
+    dst: Path,
+    *,
+    pad_start_seconds: float = 0.0,
+    pad_end_seconds: float = 0.0,
+    target_format: str,
+    bitrate_kbps: Optional[int] = None,
+    end_tail: EndTailMode = PAD_END_TAIL_DEFAULT,
+) -> Path:
+    """Write `src` to `dst` with silence prepended and/or appended.
+
+    The original body is not faded or wet-processed. When ``end_tail`` is
+    ``\"reverb\"`` and an end pad is requested, the padded region is filled
+    with a quiet multi-tap wash derived from the ending (pad-only). Use
+    ``end_tail=\"silence\"`` for dry silence.
+
+    Preserves container / encoding parameters the same way as
+    ``pitch_shift_to``. Tags are not preserved — callers should
+    ``copy_all_tags`` afterward.
+    """
+    if target_format not in SUPPORTED_FORMATS:
+        raise ValueError(
+            f"Unsupported target format: {target_format!r}. "
+            f"Expected one of: {', '.join(SUPPORTED_FORMATS)}"
+        )
+    if pad_start_seconds < 0 or pad_end_seconds < 0:
+        raise ValueError("Pad durations must be non-negative")
+    if pad_start_seconds == 0 and pad_end_seconds == 0:
+        raise ValueError(
+            "At least one of pad_start_seconds / pad_end_seconds must be > 0"
+        )
+    if end_tail not in ("reverb", "silence"):
+        raise ValueError(f"end_tail must be 'reverb' or 'silence', got {end_tail!r}")
+
+    probed = probe_audio(src)
+    sample_rate = probed.get("sample_rate") or 44100
+    try:
+        sample_rate = int(sample_rate)
+    except (TypeError, ValueError):
+        sample_rate = 44100
+
+    channels = probed.get("channels")
+    try:
+        channels_i = int(channels) if channels is not None else None
+    except (TypeError, ValueError):
+        channels_i = None
+
+    try:
+        orig_duration = float(probed.get("duration_seconds") or 0.0)
+    except (TypeError, ValueError):
+        orig_duration = 0.0
+
+    start_pad = pad_start_seconds if pad_start_seconds > 0 else 0.0
+    use_reverb_tail = pad_end_seconds > 0 and end_tail == "reverb" and orig_duration > 0
+
+    staging: Optional[Path] = None
+    encode_dst = dst
+    if sys.platform == "win32" and not _is_ascii_path(dst):
+        staging = ascii_staging_path(dst, prefix=".tm_pad")
+        encode_dst = staging
+
+    cmd: list[str] = [
+        "ffmpeg",
+        "-i",
+        ffmpeg_arg_path(src),
+        "-vn",
+    ]
+
+    if use_reverb_tail:
+        fc = build_pad_end_reverb_filter_complex(
+            orig_duration=orig_duration,
+            pad_start_seconds=start_pad,
+            pad_end_seconds=pad_end_seconds,
+            channels=channels_i,
+        )
+        cmd.extend(["-filter_complex", fc, "-map", "[out]"])
+    else:
+        filters: list[str] = []
+        if start_pad > 0:
+            filters.append(_adelay_filter(start_pad, channels_i))
+        if pad_end_seconds > 0:
+            filters.append(f"apad=pad_dur={pad_end_seconds:.10f}")
+        cmd.extend(["-af", ",".join(filters)])
+
+    if target_format == "aiff":
+        cmd.extend(
+            [
+                "-c:a",
+                _pcm_codec_for_aiff(probed),
+                "-ar",
+                str(sample_rate),
+                "-f",
+                "aiff",
+            ]
+        )
+    elif target_format == "m4a":
+        kbps = bitrate_kbps
+        if kbps is None:
+            kbps = probed.get("bitrate_kbps") or 256
+        cmd.extend(["-c:a", "aac", "-b:a", f"{int(kbps)}k", "-movflags", "+faststart"])
+    else:  # mp3
+        kbps = bitrate_kbps
+        if kbps is None:
+            kbps = probed.get("bitrate_kbps") or 320
+        cmd.extend(["-c:a", "libmp3lame", "-b:a", f"{int(kbps)}k"])
+
+    if channels_i is not None and channels_i > 0:
+        cmd.extend(["-ac", str(channels_i)])
+
+    cmd.extend(["-y", ffmpeg_arg_path(encode_dst)])
+
+    try:
+        _run_ffmpeg(cmd)
+        if staging is not None:
+            staging.replace(dst)
+    except Exception:
+        if staging is not None and staging.exists():
+            try:
+                staging.unlink()
+            except OSError:
+                pass
+        raise
+    return dst
+
+
+def trim_silence_pads_to(
+    src: Path,
+    dst: Path,
+    *,
+    trim_start_seconds: float = 0.0,
+    trim_end_seconds: float = 0.0,
+    target_format: str,
+    bitrate_kbps: Optional[int] = None,
+) -> Path:
+    """Write `src` to `dst` with silence removed from the start and/or end.
+
+    Inverse of ``pad_silence_to``. Tags are not preserved — callers should
+    ``copy_all_tags`` afterward.
+    """
+    if target_format not in SUPPORTED_FORMATS:
+        raise ValueError(
+            f"Unsupported target format: {target_format!r}. "
+            f"Expected one of: {', '.join(SUPPORTED_FORMATS)}"
+        )
+    if trim_start_seconds < 0 or trim_end_seconds < 0:
+        raise ValueError("Trim durations must be non-negative")
+    if trim_start_seconds == 0 and trim_end_seconds == 0:
+        raise ValueError(
+            "At least one of trim_start_seconds / trim_end_seconds must be > 0"
+        )
+
+    probed = probe_audio(src)
+    duration = probed.get("duration_seconds")
+    if duration is None or float(duration) <= 0:
+        raise EncodeError(f"Could not probe duration for {src}")
+    duration_f = float(duration)
+    keep = duration_f - trim_start_seconds - trim_end_seconds
+    if keep <= 0.01:
+        raise EncodeError(
+            f"Trim amounts ({trim_start_seconds:.3f}s + {trim_end_seconds:.3f}s) "
+            f"leave no audio (duration {duration_f:.3f}s)"
+        )
+
+    sample_rate = probed.get("sample_rate") or 44100
+    try:
+        sample_rate = int(sample_rate)
+    except (TypeError, ValueError):
+        sample_rate = 44100
+
+    channels = probed.get("channels")
+    try:
+        channels_i = int(channels) if channels is not None else None
+    except (TypeError, ValueError):
+        channels_i = None
+
+    staging: Optional[Path] = None
+    encode_dst = dst
+    if sys.platform == "win32" and not _is_ascii_path(dst):
+        staging = ascii_staging_path(dst, prefix=".tm_unpad")
+        encode_dst = staging
+
+    cmd = [
+        "ffmpeg",
+        "-ss",
+        f"{trim_start_seconds:.10f}",
+        "-i",
+        ffmpeg_arg_path(src),
+        "-t",
+        f"{keep:.10f}",
+        "-vn",
+    ]
+    if target_format == "aiff":
+        cmd.extend(
+            [
+                "-c:a",
+                _pcm_codec_for_aiff(probed),
+                "-ar",
+                str(sample_rate),
+                "-f",
+                "aiff",
+            ]
+        )
+    elif target_format == "m4a":
+        kbps = bitrate_kbps
+        if kbps is None:
+            kbps = probed.get("bitrate_kbps") or 256
+        cmd.extend(["-c:a", "aac", "-b:a", f"{int(kbps)}k", "-movflags", "+faststart"])
+    else:  # mp3
+        kbps = bitrate_kbps
+        if kbps is None:
+            kbps = probed.get("bitrate_kbps") or 320
+        cmd.extend(["-c:a", "libmp3lame", "-b:a", f"{int(kbps)}k"])
+
+    if channels_i is not None and channels_i > 0:
+        cmd.extend(["-ac", str(channels_i)])
+
+    cmd.extend(["-y", ffmpeg_arg_path(encode_dst)])
+
+    try:
+        _run_ffmpeg(cmd)
+        if staging is not None:
+            staging.replace(dst)
+    except Exception:
+        if staging is not None and staging.exists():
+            try:
+                staging.unlink()
+            except OSError:
+                pass
+        raise
+    return dst
 
 
 def pitch_shift_to(
