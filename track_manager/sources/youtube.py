@@ -51,11 +51,71 @@ def parse_youtube_url(url: str) -> tuple[URLType, Optional[str], Optional[str]]:
     return "video", None, None
 
 
+_RETRYABLE_YOUTUBE_ERRORS = (
+    "http error 403",
+    "403: forbidden",
+    "unable to download video data",
+    "requested format is not available",
+    "only images are available",
+)
+
+_STALE_COOKIE_MARKERS = ("cookies are no longer valid",)
+
+
+class _YtdlpLogger:
+    """Collapse yt-dlp's repeated stale-cookie warnings to a single line.
+
+    YouTube probes several player clients, and each one emits the same
+    "cookies are no longer valid" warning. Shared across YoutubeDL instances
+    so a playlist does not reprint it on every track.
+    """
+
+    _stale_cookies_warned = False
+    _seen_warnings: set[str] = set()
+
+    @classmethod
+    def reset(cls) -> None:
+        cls._stale_cookies_warned = False
+        cls._seen_warnings = set()
+
+    def debug(self, msg: str) -> None:
+        return
+
+    def info(self, msg: str) -> None:
+        return
+
+    def warning(self, msg: str) -> None:
+        text = str(msg)
+        lowered = text.lower()
+        if any(marker in lowered for marker in _STALE_COOKIE_MARKERS):
+            if type(self)._stale_cookies_warned:
+                return
+            type(self)._stale_cookies_warned = True
+            print(
+                "⚠️ YouTube cookies are stale. Re-login in the configured browser, "
+                "or clear youtube.cookies_from_browser unless you need age-restricted videos.",
+                file=sys.stderr,
+            )
+            return
+        if text in type(self)._seen_warnings:
+            return
+        type(self)._seen_warnings.add(text)
+        print(f"WARNING: {text}", file=sys.stderr)
+
+    def error(self, msg: str) -> None:
+        print(str(msg), file=sys.stderr)
+
+
+_YDL_LOGGER = _YtdlpLogger()
+
+
 def _auth_opts() -> Dict[str, Any]:
     """yt-dlp auth options sourced from config for age-restricted videos.
 
     Returns either {"cookiefile": ...} or {"cookiesfrombrowser": (...,)},
-    or {} if neither is configured. `cookiefile` takes precedence.
+    plus optional extractor_args. `cookiefile` takes precedence over browser
+    cookies. The Python API requires extractor_args values to be dicts of
+    lists (not CLI ``key=value`` strings).
     """
     cfg = Config()
     opts: Dict[str, Any] = {}
@@ -68,23 +128,47 @@ def _auth_opts() -> Dict[str, Any]:
             # yt-dlp expects a tuple: (browser_name, profile, keyring, container)
             opts["cookiesfrombrowser"] = (browser,)
 
-    # Per-extractor escape hatches for when YouTube's default clients are
-    # blocked by JS challenges or PO token requirements.
-    extractor_args: Dict[str, list[str]] = {}
+    youtube_args: Dict[str, list[str]] = {}
     clients = cfg.youtube_player_clients
     if clients:
-        extractor_args.setdefault("youtube", []).append(
-            "player_client=" + ",".join(clients)
-        )
+        youtube_args["player_client"] = clients
     po_token = cfg.youtube_po_token
     if po_token:
-        extractor_args.setdefault("youtube", []).append(f"po_token={po_token}")
-    if extractor_args:
-        opts["extractor_args"] = extractor_args
+        youtube_args["po_token"] = [po_token]
+    if youtube_args:
+        opts["extractor_args"] = {"youtube": youtube_args}
     return opts
 
 
-def _ydl_opts(output_dir: Path) -> Dict[str, Any]:
+def _has_auth_overrides() -> bool:
+    """True if config would pass cookies or extractor overrides to yt-dlp."""
+    cfg = Config()
+    return bool(
+        cfg.youtube_cookies_file
+        or cfg.youtube_cookies_from_browser
+        or cfg.youtube_player_clients
+        or cfg.youtube_po_token
+    )
+
+
+def _is_retryable_youtube_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(snippet in msg for snippet in _RETRYABLE_YOUTUBE_ERRORS)
+
+
+def _print_youtube_error_hint(exc: BaseException) -> None:
+    if not _is_retryable_youtube_error(exc):
+        return
+    print(
+        "💡 YouTube HTTP 403 is usually an outdated yt-dlp or stale cookies.\n"
+        "   Update: pip install -U 'yt-dlp[default]'\n"
+        "   Re-login to YouTube in the configured browser, or clear\n"
+        "   youtube.cookies_from_browser unless you need age-restricted videos.",
+        file=sys.stderr,
+    )
+
+
+def _ydl_opts(output_dir: Path, *, include_auth: bool = True) -> Dict[str, Any]:
     """yt-dlp options used for every single-track download.
 
     No FFmpegExtractAudio or EmbedThumbnail postprocessors: yt-dlp gives us
@@ -99,11 +183,39 @@ def _ydl_opts(output_dir: Path) -> Dict[str, Any]:
         "outtmpl": str(output_dir / ".tmp_%(id)s.%(ext)s"),
         "quiet": True,
         "no_warnings": False,
+        "logger": _YDL_LOGGER,
         "extract_flat": False,
         "remote_components": ["ejs:github"],
     }
-    opts.update(_auth_opts())
+    if include_auth:
+        opts.update(_auth_opts())
     return opts
+
+
+def _extract_info_or_fallback(
+    ydl: Any,
+    url: str,
+    output_dir: Path,
+    *,
+    download: bool,
+) -> Any:
+    """extract_info, retrying without cookies/client overrides on 403.
+
+    Stale browser cookies and pinned player clients often produce HTTP 403
+    or "only images are available". yt-dlp defaults without auth usually
+    still work for public videos.
+    """
+    try:
+        return ydl.extract_info(url, download=download)
+    except Exception as exc:
+        if not _has_auth_overrides() or not _is_retryable_youtube_error(exc):
+            raise
+        print(
+            "⚠️ YouTube rejected the configured cookies/clients. "
+            "Retrying with yt-dlp defaults..."
+        )
+        with yt_dlp.YoutubeDL(_ydl_opts(output_dir, include_auth=False)) as retry_ydl:
+            return retry_ydl.extract_info(url, download=download)
 
 
 class YouTubeDownloader(BaseDownloader):
@@ -245,13 +357,16 @@ class YouTubeDownloader(BaseDownloader):
                 try:
                     if self._check_predownload_duplicate(ydl, url):
                         return
-                    info = ydl.extract_info(url, download=True)
+                    info = _extract_info_or_fallback(
+                        ydl, url, self.output_dir, download=True
+                    )
                     if self._process_download(info, target_format, None):
                         print("✅ Download complete")
                     else:
                         print("❌ Download failed", file=sys.stderr)
                 except Exception as e:
                     print(f"❌ Download failed: {e}", file=sys.stderr)
+                    _print_youtube_error_hint(e)
                     self.log_failure(url, str(e))
                     raise
             return
@@ -309,7 +424,9 @@ class YouTubeDownloader(BaseDownloader):
             # Playlist without parent downloader (rare; mostly tests).
             with yt_dlp.YoutubeDL(_ydl_opts(self.output_dir)) as ydl:
                 try:
-                    info = ydl.extract_info(url, download=True)
+                    info = _extract_info_or_fallback(
+                        ydl, url, self.output_dir, download=True
+                    )
                     entries = info.get("entries", [])
                     total = len(entries)
 
@@ -335,6 +452,7 @@ class YouTubeDownloader(BaseDownloader):
 
                 except Exception as e:
                     print(f"❌ Download failed: {e}", file=sys.stderr)
+                    _print_youtube_error_hint(e)
                     self.log_failure(url, str(e))
                     raise
 
@@ -369,10 +487,13 @@ class YouTubeDownloader(BaseDownloader):
             with yt_dlp.YoutubeDL(_ydl_opts(self.output_dir)) as ydl:
                 if self._check_predownload_duplicate(ydl, video_url):
                     return True
-                info = ydl.extract_info(video_url, download=True)
+                info = _extract_info_or_fallback(
+                    ydl, video_url, self.output_dir, download=True
+                )
                 return self._process_download(info, target_format, playlist_url)
         except Exception as e:
             print(f"  ⚠️ Download failed: {e}", file=sys.stderr)
+            _print_youtube_error_hint(e)
             return False
 
     def _process_download(

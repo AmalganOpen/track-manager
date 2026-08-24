@@ -147,10 +147,11 @@ class Config:
 
     @property
     def youtube_player_clients(self) -> Optional[list[str]]:
-        """Override yt-dlp YouTube player clients (e.g. ['mweb', 'tv_embedded']).
+        """Override yt-dlp YouTube player clients (e.g. ['web', 'ios']).
 
-        Useful when the default clients require unsolved JS challenges or
-        PO tokens. Returns None to let yt-dlp pick its defaults.
+        Leave unset so yt-dlp picks current defaults. Pinning old clients
+        such as mweb or tv_embedded often causes HTTP 403. Returns None to
+        let yt-dlp choose.
         """
         clients = self.get("youtube.player_clients")
         if isinstance(clients, str):

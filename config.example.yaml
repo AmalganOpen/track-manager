@@ -35,13 +35,13 @@ soundcloud:
   oauth_token: ""
 
 # YouTube configuration (OPTIONAL)
-# Age-restricted videos require authentication. Provide either a path to a
-# cookies.txt file (Netscape format), or the name of a browser to import
+# Age-restricted / members-only videos need cookies. Provide either a path to
+# a cookies.txt file (Netscape format), or the name of a browser to import
 # cookies from (e.g. "chrome", "firefox", "safari", "brave", "edge").
 #
-# Export cookies.txt with an extension like "Get cookies.txt LOCALLY" while
-# logged in to youtube.com, or just point `cookies_from_browser` at the
-# browser you're already signed in to.
+# Leave cookies empty unless you actually need them. Stale cookies (YouTube
+# rotates them often) cause HTTP 403 for *public* videos. If downloads start
+# failing with 403, re-login to YouTube in that browser or clear this field.
 #
 # See: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
 youtube:
@@ -51,10 +51,8 @@ youtube:
   cookies_from_browser: ""
 
   # Override yt-dlp's YouTube player clients. Leave empty for defaults.
-  # Useful when the default clients fail with JS challenges ("found 0 n
-  # function possibilities") or demand a GVS PO token. Clients that often
-  # work with cookies and no JS solving: mweb, tv_embedded, android_vr.
-  # Example: "mweb,tv_embedded"
+  # Pinning old workarounds (mweb, tv_embedded, android_vr) often makes
+  # HTTP 403 worse. Only set this if you know a specific client still works.
   player_clients: ""
 
   # Optional GVS PO token in yt-dlp's "<client>.gvs+<token>" format.

@@ -268,12 +268,24 @@ Get credentials from: https://developer.spotify.com/dashboard
 
 ### YouTube Download Issues
 
+**Problem:** `HTTP Error 403: Forbidden` or "unable to download video data"
+
+YouTube breaks extractors often. This is almost always an outdated yt-dlp, stale cookies, or a missing JS runtime — not a private video.
+
+**Solution:**
+
+1. Update yt-dlp: `pip install -U 'yt-dlp[default]'` (needs 2026.8.19+)
+2. Install Deno if you don't have it: `brew install deno` (solves YouTube JS challenges)
+3. If `youtube.cookies_from_browser` is set, re-login to YouTube in that browser, or clear the setting unless the video is age-restricted. Stale cookies make 403s *more* likely.
+4. Leave `youtube.player_clients` empty so yt-dlp can pick current defaults
+5. Run `tm check-setup` to confirm versions
+
 **Problem:** "Error: Unable to extract video info"
 
 **Possible causes:**
 
 - Video is private or removed
-- Video is age-restricted
+- Video is age-restricted (needs fresh cookies)
 - Geo-restricted content
 - YouTube rate limiting
 

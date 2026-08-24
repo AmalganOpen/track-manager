@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "yt-dlp>=2023.10.0",
+    "yt-dlp[default]>=2026.8.19",
     "spotdl>=4.4.3",
     "requests>=2.31.0",
     "mutagen>=1.47.0",

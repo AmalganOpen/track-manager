@@ -1,7 +1,7 @@
 # Python dependencies for track-manager
 
 # Core functionality
-yt-dlp>=2026.2.4           # YouTube and SoundCloud downloads (2026.2.4+ required for recent YouTube API changes)
+yt-dlp[default]>=2026.8.19  # YouTube/SoundCloud; [default] pulls yt-dlp-ejs for JS challenges
 spotdl>=4.4.3              # Spotify downloads (requires Python >=3.10)
 requests>=2.31.0           # Direct URL downloads
 mutagen>=1.47.0            # Audio metadata handling
