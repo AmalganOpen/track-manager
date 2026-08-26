@@ -699,8 +699,8 @@ class TestFindDuplicatesByTrackURL:
         assert len(result) == 1
         assert result[0] == file_path
 
-    def test_find_duplicates_by_track_url_ignores_query_params(self, tmp_path):
-        """Test that query parameters in URLs are ignored."""
+    def test_find_duplicates_by_track_url_ignores_tracking_params(self, tmp_path):
+        """Tracking params (e.g. Spotify ``si=``) are ignored; identity is the path."""
         import subprocess
 
         from mutagen.mp4 import MP4
@@ -737,6 +737,53 @@ class TestFindDuplicatesByTrackURL:
         )
         assert len(result) == 1
         assert result[0] == file_path
+
+    def test_find_duplicates_by_track_url_youtube_video_id_is_identity(self, tmp_path):
+        """Different YouTube ``v=`` values are different recordings.
+
+        Stripping all query params would collapse every watch URL to
+        ``youtube.com/watch`` and let a new download overwrite an unrelated
+        existing file (the smart-upgrade path).
+        """
+        import subprocess
+
+        from mutagen.mp4 import MP4
+
+        from track_manager.duplicates import find_duplicates_by_track_url
+
+        file_path = tmp_path / "owned.m4a"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=1000:duration=1",
+                "-c:a",
+                "aac",
+                "-y",
+                str(file_path),
+            ],
+            capture_output=True,
+            check=True,
+        )
+
+        audio = MP4(str(file_path))
+        audio["----:com.apple.iTunes:TRACK_URL"] = [
+            b"https://www.youtube.com/watch?v=TVSTATICID1"
+        ]
+        audio.save()
+
+        assert (
+            find_duplicates_by_track_url(
+                "https://www.youtube.com/watch?v=AMYDIAMOND1", tmp_path
+            )
+            == []
+        )
+        matches = find_duplicates_by_track_url(
+            "https://www.youtube.com/watch?v=TVSTATICID1&list=PLother", tmp_path
+        )
+        assert matches == [file_path]
 
     def test_find_duplicates_by_track_url_case_insensitive(self, tmp_path):
         """Test that URL matching is case-insensitive."""

@@ -3,9 +3,28 @@
 import re
 from pathlib import Path
 from typing import List, Optional, Tuple
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from mutagen import File as MutagenFile
 from mutagen.mp4 import MP4
+
+# Query params that never identify a recording. Identity-bearing params
+# (YouTube ``v=``, playlist ``list=``) must *not* be stripped.
+_TRACKING_QUERY_PARAMS = {
+    "si",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+}
+
+_YOUTUBE_HOSTS = {
+    "youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtube-nocookie.com",
+}
 
 # All audio formats we recognise when scanning the library for duplicates.
 # AIFF is included because it's the default download format; MP4-style
@@ -168,6 +187,59 @@ def normalize_metadata(artist: Optional[str], title: Optional[str]) -> Tuple[str
     return normalize_text(artist or ""), normalize_text(title or "")
 
 
+def normalize_track_url(track_url: str) -> str:
+    """Normalize a track URL for identity comparison.
+
+    Tracking params (``si``, UTM, …) are dropped. Identity-bearing query
+    params are kept — most importantly YouTube's ``v=``, which *is* the
+    video id. Stripping all query params would make every
+    ``youtube.com/watch?v=…`` URL compare equal, so a new YouTube download
+    could overwrite an unrelated existing file.
+    """
+    if not track_url:
+        return ""
+
+    parsed = urlparse(track_url.strip())
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = parsed.path or ""
+    qs = parse_qs(parsed.query, keep_blank_values=False)
+
+    if host == "youtu.be":
+        video_id = path.strip("/")
+        if video_id:
+            return f"https://youtube.com/watch?v={video_id}"
+    elif host in _YOUTUBE_HOSTS:
+        stripped_path = path.rstrip("/") or "/"
+        if stripped_path.startswith("/shorts/"):
+            video_id = stripped_path.split("/")[-1]
+            if video_id:
+                return f"https://youtube.com/watch?v={video_id}"
+        if stripped_path.startswith("/embed/"):
+            video_id = stripped_path.split("/")[-1]
+            if video_id:
+                return f"https://youtube.com/watch?v={video_id}"
+        if stripped_path in {"/watch", "/"}:
+            video_id = (qs.get("v") or [None])[0]
+            if video_id:
+                return f"https://youtube.com/watch?v={video_id}"
+        if stripped_path == "/playlist":
+            list_id = (qs.get("list") or [None])[0]
+            if list_id:
+                return f"https://youtube.com/playlist?list={list_id}"
+
+    filtered = {
+        key: values
+        for key, values in qs.items()
+        if key.lower() not in _TRACKING_QUERY_PARAMS
+    }
+    query = urlencode(filtered, doseq=True)
+    path_out = path.rstrip("/") if path != "/" else path
+    scheme = (parsed.scheme or "https").lower()
+    return urlunparse((scheme, host, path_out, "", query, "")).lower()
+
+
 def find_duplicates_by_track_url(track_url: str, library_dir: Path) -> List[Path]:
     """Find duplicate tracks in library by track URL.
 
@@ -183,8 +255,9 @@ def find_duplicates_by_track_url(track_url: str, library_dir: Path) -> List[Path
 
     duplicates = []
 
-    # Normalize URL for comparison (remove trailing slashes, query params)
-    normalized_url = track_url.rstrip("/").split("?")[0].lower()
+    normalized_url = normalize_track_url(track_url)
+    if not normalized_url:
+        return []
 
     # M4A files store track URL as a freeform iTunes atom.
     for pattern in _M4A_GLOBS:
@@ -196,8 +269,7 @@ def find_duplicates_by_track_url(track_url: str, library_dir: Path) -> List[Path
                 url_tags = audio.get("----:com.apple.iTunes:TRACK_URL")
                 if url_tags:
                     file_url = url_tags[0].decode("utf-8")
-                    file_url_normalized = file_url.rstrip("/").split("?")[0].lower()
-                    if file_url_normalized == normalized_url:
+                    if normalize_track_url(file_url) == normalized_url:
                         duplicates.append(file_path)
             except Exception:
                 continue
@@ -212,8 +284,7 @@ def find_duplicates_by_track_url(track_url: str, library_dir: Path) -> List[Path
                 for frame in audio.getall("TXXX"):
                     if frame.desc == "TRACK_URL" and frame.text:
                         file_url = str(frame.text[0])
-                        file_url_normalized = file_url.rstrip("/").split("?")[0].lower()
-                        if file_url_normalized == normalized_url:
+                        if normalize_track_url(file_url) == normalized_url:
                             duplicates.append(file_path)
                             break
             except Exception:
