@@ -1,5 +1,6 @@
 """Command-line interface for track-manager."""
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -515,10 +516,24 @@ def check_setup():
         import yt_dlp
 
         click.echo(f"✅ yt-dlp: {yt_dlp.version.__version__}")
+        parts = tuple(
+            int(p) for p in yt_dlp.version.__version__.split(".") if p.isdigit()
+        )
+        if parts < (2026, 8, 19):
+            click.echo(
+                "⚠️ yt-dlp is outdated — YouTube downloads may fail with HTTP 403"
+            )
+            click.echo("   Update: pip install -U 'yt-dlp[default]'")
     except ImportError:
         click.echo("❌ yt-dlp: Not installed", err=True)
-        click.echo("   Install: pip install yt-dlp", err=True)
+        click.echo("   Install: pip install 'yt-dlp[default]'", err=True)
         all_ok = False
+
+    if shutil.which("deno") is None and shutil.which("node") is None:
+        click.echo(
+            "⚠️ No JavaScript runtime (deno/node) on PATH — YouTube JS challenges may fail"
+        )
+        click.echo("   Install: brew install deno")
 
     # Check spotdl
     try:
