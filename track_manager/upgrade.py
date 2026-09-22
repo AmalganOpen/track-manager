@@ -358,6 +358,10 @@ def upgrade_track(
     new_attempts = prev_attempts + 1
     _write_upgrade_attempts(original_path, new_attempts)
     original_blob = tm_blob.read_blob(original_path)
+    # Snapshot pad amounts before we overwrite the file (AIFF in-place move).
+    recorded_pads = _pads_from_original(
+        original_blob=original_blob, original_path=original_path
+    )
 
     with tempfile.TemporaryDirectory(prefix="tm-upgrade-") as tmp_str:
         tmp_dir = Path(tmp_str)
@@ -458,6 +462,13 @@ def upgrade_track(
                 # Don't fail the upgrade just because tag refresh failed —
                 # the upgraded audio is already in place.
                 print(f"  ⚠️  Failed to refresh metadata: {e}", file=sys.stderr)
+
+            # Re-apply any silence pads recorded on the original so the new
+            # audio lines up with the existing Rekordbox grid/cues.
+            try:
+                _reapply_pad_after_upgrade(dest_path, recorded_pads=recorded_pads)
+            except Exception as e:
+                print(f"  ⚠️  Failed to re-apply pads: {e}", file=sys.stderr)
         else:
             dest_path = original_path.with_suffix(new_file.suffix)
             extension_changed = dest_path.suffix.lower() != original_ext
@@ -469,6 +480,11 @@ def upgrade_track(
             # standalone track URL.
             if original_provenance.get("playlist_url"):
                 _patch_playlist_url(dest_path, original_provenance["playlist_url"])
+
+            try:
+                _reapply_pad_after_upgrade(dest_path, recorded_pads=recorded_pads)
+            except Exception as e:
+                print(f"  ⚠️  Failed to re-apply pads: {e}", file=sys.stderr)
 
             # Remove the original only if the extension changed (otherwise we just
             # overwrote it via the move above)
@@ -568,6 +584,67 @@ def _refresh_aiff_metadata(
         doc["cover_art"]["embedded"] = True
 
     tm_audio.apply_basic_tags(dest_path, doc, cover_data)
+    tm_blob.write_blob(dest_path, doc)
+
+
+def _pads_from_original(
+    *,
+    original_blob: Optional[dict],
+    original_path: Path,
+) -> tuple[float, float]:
+    """Read cumulative pads from the pre-upgrade blob or tags."""
+    if isinstance(original_blob, dict):
+        processing = original_blob.get("processing") or {}
+        ext = processing.get("padding") or processing.get("extend") or {}
+        try:
+            start_ms = float(ext.get("pad_start_ms") or 0.0)
+            end_ms = float(ext.get("pad_end_ms") or 0.0)
+            if start_ms > 0 or end_ms > 0:
+                return (start_ms / 1000.0, end_ms / 1000.0)
+        except (TypeError, ValueError):
+            pass
+    # original_path may already have been overwritten — best-effort tag read.
+    if original_path.exists():
+        tagged = tm_audio.read_recorded_pad(original_path)
+        if tagged is not None:
+            return tagged
+    return (0.0, 0.0)
+
+
+def _reapply_pad_after_upgrade(
+    dest_path: Path,
+    *,
+    recorded_pads: tuple[float, float],
+) -> None:
+    """Pad upgraded audio with any silence recorded on the previous file."""
+    from . import pad as tm_pad
+
+    start_s, end_s = recorded_pads
+    if start_s <= 0 and end_s <= 0:
+        return
+
+    print(
+        f"  ➕ Re-applying pads: "
+        f"start={start_s * 1000:.1f}ms end={end_s * 1000:.1f}ms"
+    )
+    tm_pad.apply_recorded_pads(
+        dest_path, pad_start_seconds=start_s, pad_end_seconds=end_s
+    )
+
+    # Keep blob processing.padding in sync on the upgraded file.
+    doc = tm_blob.read_blob(dest_path)
+    if doc is None:
+        doc = tm_blob.empty_document()
+    processing = doc.setdefault("processing", {})
+    padding_doc = processing.setdefault("padding", {})
+    padding_doc["pad_start_ms"] = round(start_s * 1000.0, 3)
+    padding_doc["pad_end_ms"] = round(end_s * 1000.0, 3)
+    padding_doc["padded_at"] = datetime.now(timezone.utc).isoformat()
+    info = tm_audio.probe_audio(dest_path)
+    if info.get("duration_seconds") is not None:
+        doc.setdefault("track", {})["duration_seconds"] = info["duration_seconds"]
+    if info.get("size_bytes") is not None:
+        doc.setdefault("audio", {})["size_bytes"] = info["size_bytes"]
     tm_blob.write_blob(dest_path, doc)
 
 

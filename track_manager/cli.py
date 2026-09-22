@@ -99,10 +99,11 @@ def cli(ctx):
 def download(url: str, format: str, output: Optional[str], dumb: bool, no_cache: bool):
     """Download track(s) from URL.
 
-    Supports: Spotify, YouTube, SoundCloud, and direct URLs.
+    Supports: Spotify, YouTube, SoundCloud, Instagram, and direct URLs.
 
     Automatically downloads FLAC when available via ISRC lookup
-    (unless --dumb is specified).
+    (unless --dumb is specified). Instagram is fetched directly (not on
+    song.link); a logged-in browser session is usually required.
     """
     config = Config()
 
@@ -354,36 +355,53 @@ def check_quality(detailed: bool, verbose: bool, output: Optional[str]):
     help="Audit the whole Rekordbox collection (master.db) instead of just the "
     "library directory. Requires Rekordbox to be CLOSED.",
 )
-def check_compat(output: Optional[str], scan_all: bool):
-    """Audit tracks for CDJ-2000NXS playability.
+@click.option(
+    "--gear",
+    multiple=True,
+    help="Player to check (repeatable). Default: all of cdj-2000nxs, "
+    "xdj-1000mk2, cdj-2000nxs2, cdj-3000. Aliases: nxs, nxs2, 3000, "
+    "xdj-xz, opus-quad, cdj-900nxs.",
+)
+def check_compat(output: Optional[str], scan_all: bool, gear: tuple[str, ...]):
+    """Audit tracks for Pioneer USB players.
 
-    The original CDJ-2000NXS (2012) has a strict decoder: AIFF/WAV must be
-    uncompressed PCM at 16/24-bit and 44.1/48 kHz; AAC and MP3 are capped at
-    48 kHz; FLAC, Apple Lossless, 32-bit float, compressed AIFF-C, and
-    WAVE_FORMAT_EXTENSIBLE WAVs are all rejected.
+    Default gear: CDJ-2000NXS, XDJ-1000MK2, CDJ-2000NXS2, CDJ-3000. A track
+    must pass every selected player. NXS is the strictest codec bar (no
+    FLAC/ALAC, PCM 44.1/48 kHz). NXS2 and CDJ-3000 allow FLAC/ALAC and PCM
+    up to 96 kHz. XDJ-1000MK2 allows FLAC/ALAC at 48 kHz and rejects
+    embedded covers over 640px or progressive JPEG (it can walk into a
+    huge AIFF ID3 tail at end-of-track). Fix covers with ``tm scale-covers``.
 
     Also flags FAT/USB-unsafe filenames (\\ / : * ? " < > |, control chars,
-    trailing space/dot, names over 255 chars) that break rekordbox USB export
-    even when the audio codec itself is fine.
+    trailing space/dot, names over 255 chars), 32-bit float PCM, compressed
+    AIFF-C, and WAVE_FORMAT_EXTENSIBLE WAVs.
 
     By default this scans the configured library directory on disk (fast, no
     database lock). Pass --all to instead audit every track in Rekordbox's
-    master.db, which mirrors what the "export to device" popup checks.
+    master.db. Pass --gear xdj-1000mk2 to audit one player.
     """
     from . import compat as tm_compat
+
+    try:
+        specs = tm_compat.resolve_devices(gear or None)
+    except ValueError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    summary = tm_compat.device_summary(specs)
 
     config = Config()
     library_dir = Path(output) if output else config.output_dir
 
     if scan_all:
-        results = _collect_compat_from_rekordbox(library_dir)
+        results = _collect_compat_from_rekordbox(library_dir, gear=gear or None)
     else:
         if not library_dir.exists():
             click.echo(f"❌ Library directory not found: {library_dir}", err=True)
             sys.exit(1)
-        click.echo(f"🔍 Scanning {library_dir} for CDJ-2000NXS compatibility...")
+        click.echo(f"🔍 Scanning {library_dir} for Pioneer USB playability...")
+        click.echo(f"   Players: {summary}")
         click.echo()
-        results = tm_compat.scan_dir(library_dir)
+        results = tm_compat.scan_dir(library_dir, gear=gear or None)
 
     if not results:
         click.echo("No audio files found to check.")
@@ -400,7 +418,7 @@ def check_compat(output: Optional[str], scan_all: bool):
 
     if incompatible:
         click.echo()
-        click.echo("Incompatible with CDJ-2000NXS:")
+        click.echo("Incompatible:")
         for p, r in incompatible:
             click.echo(f"  ❌ {p.name}: {r.reason}")
 
@@ -413,10 +431,124 @@ def check_compat(output: Optional[str], scan_all: bool):
     if incompatible:
         sys.exit(1)
     click.echo()
-    click.echo("🎉 All checked tracks are CDJ-2000NXS compatible.")
+    click.echo(f"🎉 All checked tracks play on {summary}.")
 
 
-def _collect_compat_from_rekordbox(library_dir: Path) -> list:
+@cli.command("scale-covers")
+@click.argument("track", required=False)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    help="Library directory (overrides config)",
+)
+@click.option(
+    "--max-side",
+    type=click.IntRange(1, 4096),  # keep in sync with cover.COVER_SIDE_LIMIT
+    default=None,
+    help="Long-side cap in pixels (default: 640, max: 4096)",
+)
+@click.option(
+    "--dry-run",
+    "-n",
+    is_flag=True,
+    help="Show what would change without writing",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip the confirmation prompt for a whole-library run",
+)
+def scale_covers(
+    track: Optional[str],
+    output: Optional[str],
+    max_side: Optional[int],
+    dry_run: bool,
+    yes: bool,
+):
+    """Shrink embedded cover art to a Pioneer-safe JPEG.
+
+    XDJ-1000 MK2 walked off the end of AIFFs whose ID3 tail was a huge
+    APIC. Rekordbox already copies artwork into PIONEER/Artwork/, so the
+    embedded image only needs to be large enough to import. Default cap is
+    640×640 (the largest cover that loaded on that deck).
+
+    Writes are atomic (sibling copy, then replace) so a crash cannot leave
+    a truncated audio file. The metadata blob and other tags are left
+    alone. Without TRACK, scans the whole library and asks before writing.
+    TRACK is a partial filename.
+    """
+    from . import cover as tm_cover
+    from .library import find_matching_tracks, list_library_tracks, pick_track
+
+    config = Config()
+    library_dir = Path(output) if output else config.output_dir
+    if not library_dir.is_dir():
+        click.echo(f"❌ Library directory not found: {library_dir}", err=True)
+        sys.exit(1)
+
+    cap = max_side if max_side is not None else tm_cover.COVER_MAX_SIDE
+
+    if track:
+        matches = find_matching_tracks(track, library_dir)
+        if not matches:
+            click.echo(f"❌ No library track matching {track!r}", err=True)
+            sys.exit(1)
+        chosen = pick_track(matches)
+        if chosen is None:
+            sys.exit(1)
+        tracks = [chosen]
+    else:
+        tracks = list_library_tracks(library_dir)
+
+    if not tracks:
+        click.echo("No audio files found to check.")
+        return
+
+    if not dry_run and not shutil.which("ffmpeg"):
+        click.echo("❌ ffmpeg not found on PATH (needed to scale covers)", err=True)
+        sys.exit(1)
+
+    if not dry_run and track is None and not yes:
+        if not click.confirm(
+            f"Scale covers in {len(tracks)} track(s) in {library_dir}? "
+            "Each file is replaced only after a successful rewrite.",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            return
+
+    click.echo(
+        f"🖼️ {'Dry-run: would scale' if dry_run else 'Scaling'} covers "
+        f"(max {cap}px) in {len(tracks)} track(s)..."
+    )
+    click.echo()
+    try:
+        results = tm_cover.scale_library_covers(tracks, max_side=cap, dry_run=dry_run)
+    except KeyboardInterrupt:
+        click.echo("\n⚠️ Scale-covers cancelled by user")
+        sys.exit(1)
+    scaled = [r for r in results if r.action == "scaled"]
+    skipped = [r for r in results if r.action == "skipped"]
+    failed = [r for r in results if r.action == "failed"]
+    for r in scaled:
+        click.echo(f"  🔄 {r.path.name}: {r.detail}")
+    if failed:
+        click.echo()
+        for r in failed:
+            click.echo(f"  ❌ {r.path.name}: {r.detail}")
+    click.echo()
+    click.echo(f"  🔄 Scaled:  {len(scaled)}")
+    click.echo(f"  ⏭️  Skipped: {len(skipped)}")
+    click.echo(f"  ❌ Failed:  {len(failed)}")
+    if failed:
+        sys.exit(1)
+
+
+def _collect_compat_from_rekordbox(
+    library_dir: Path, *, gear: Optional[tuple[str, ...]] = None
+) -> list:
     """Classify every on-disk track Rekordbox knows about (requires it closed)."""
     from . import compat as tm_compat
     from . import rekordbox_db as tm_rb
@@ -439,9 +571,11 @@ def _collect_compat_from_rekordbox(library_dir: Path) -> list:
         click.echo(f"❌ Could not open Rekordbox database: {e}", err=True)
         sys.exit(1)
 
+    summary = tm_compat.device_summary(tm_compat.resolve_devices(gear))
     click.echo(
-        f"🔍 Auditing {len(tracks)} Rekordbox track(s) for CDJ-2000NXS compatibility..."
+        f"🔍 Auditing {len(tracks)} Rekordbox track(s) for Pioneer USB playability..."
     )
+    click.echo(f"   Players: {summary}")
     click.echo()
 
     results: list = []
@@ -451,7 +585,7 @@ def _collect_compat_from_rekordbox(library_dir: Path) -> list:
         if not path.exists():
             missing += 1
             continue
-        results.append((path, tm_compat.classify(path)))
+        results.append((path, tm_compat.classify(path, gear=gear)))
 
     if missing:
         click.echo(f"(Skipped {missing} track(s) whose file is missing on disk.)")
@@ -1748,8 +1882,7 @@ def tune(
     default="reverb",
     show_default=True,
     help=(
-        "What fills the end pad only: quiet reverb wash "
-        "(body untouched) or dry silence"
+        "What fills the end pad only: quiet reverb wash (body untouched) or dry silence"
     ),
 )
 @click.option(

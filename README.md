@@ -4,7 +4,7 @@ Universal music downloader with smart duplicate detection and metadata managemen
 
 ## Features
 
-- 🎯 **Universal Platform Support** - Works with ANY music platform (Spotify, Apple Music, YouTube, SoundCloud, Deezer, Amazon Music, TIDAL, etc.)
+- 🎯 **Universal Platform Support** - Works with ANY music platform (Spotify, Apple Music, YouTube, SoundCloud, Instagram, Deezer, Amazon Music, TIDAL, etc.)
 - 🎵 **High-Quality Downloads** - Automatic FLAC from proxy
 - 🔍 **Smart Duplicate Detection** - Works across formats (M4A vs MP3)
 - 📝 **Metadata Management** - CSV-based review and correction workflow
@@ -24,7 +24,7 @@ Track Manager uses a **smart download system** to get the best quality audio:
    - ✅ No credentials required
    - ✅ Includes full metadata and cover art
 3. **Automatic conversion** → M4A 256kbps AAC (preserves quality, better compatibility)
-4. **Fallback** → If not on proxy, downloads from from youtube or soundcloud
+4. **Fallback** → If not on proxy, downloads from YouTube, SoundCloud, or Instagram
 
 **Quality comparison:**
 
@@ -85,17 +85,23 @@ ffmpeg -version
 ffprobe -version
 ```
 
-### Basic Setup (No Credentials Required)
+### Basic Setup
 
-**Individual tracks** work for ANY platform (Apple Music, YouTube, SoundCloud, Deezer, Amazon Music, TIDAL, etc.):
+**Individual tracks** work for ANY platform (Apple Music, YouTube, SoundCloud, Instagram, Deezer, Amazon Music, TIDAL, etc.):
 
 - ✅ Converted via song.link → Proxy for high-quality FLAC
-- ✅ No credentials needed
+- **Instagram** is fetched directly (not on song.link). A logged-in browser
+  session is usually required — see Instagram setup below.
+- song.link auth is optional (higher rate limits). Email `developers@song.link`
+  for a key, then set `songlink.api_key` or `SONGLINK_API_KEY`. It is sent as
+  the `key` query param. If the live API returns 401, remaining lookups this
+  run are skipped and downloads fall back to YouTube / SoundCloud.
 
 **Playlists** only work for:
 
 - ✅ **YouTube playlists** - No setup needed
 - ✅ **SoundCloud playlists** - No setup needed
+- ✅ **Instagram carousels** - Multi-video posts; profile URLs are not supported
 - ⚠️ **Spotify playlists** - Requires API credentials (see below)
 
 ### Spotify API Setup (Optional - Only for Playlists)
@@ -118,6 +124,57 @@ ffprobe -version
      client_id: "your_client_id"
      client_secret: "your_client_secret"
    ```
+
+### Instagram Setup (Optional — usually required)
+
+Instagram reels and most posts need a logged-in session. Public posts
+sometimes work without cookies until Instagram's anonymous rate limit hits.
+
+1. Log in to Instagram in Chrome, Firefox, Safari, Brave, or Edge.
+2. Add to `config.yaml`:
+
+   ```yaml
+   instagram:
+     cookies_from_browser: "firefox"   # or chrome, safari, brave, edge
+     # cookies_file: ""                # Netscape cookies.txt instead
+   ```
+
+If `instagram.cookies_from_browser` is empty, `youtube.cookies_from_browser`
+is reused (browser cookies include Instagram when you are logged in there).
+Profile URLs are not supported — pass a `/reel/`, `/p/`, `/tv/`, or `/share/`
+link.
+
+### Setup (Optional - Lossless Fallback)
+
+When public lossless proxies (Qobuz / TIDAL) are unavailable, Track Manager can
+fall back to [Soulseek](https://www.slsknet.org/) via the
+[sockseek](https://github.com/fiso64/sockseek) CLI (formerly `sldl`) before
+YouTube/spotdl.
+
+1. Install `sockseek` and put it on your `PATH`
+   (download a binary from [releases](https://github.com/fiso64/sockseek/releases);
+   no need to clone).
+2. Pick a unique Soulseek username and password. There is no signup page —
+   the first successful login creates the account. If the name is taken, login
+   fails and you should choose another. Add them to `config.yaml`:
+
+   ```yaml
+   soulseek:
+     username: "your-soulseek-username"
+     password: "your-soulseek-password"
+     # Optional:
+     # binary: ""                # default: find sockseek or sldl on PATH
+     # timeout_seconds: 180
+     # length_tol_seconds: 3
+   ```
+
+Soulseek is enabled only when both username and password are set. Matching uses
+artist + title + duration (ISRC is kept for provenance only).
+
+**Etiquette:** sockseek does not share files back to the network. If you already
+run Nicotine+ or [slskd](https://github.com/slskd/slskd), use a _separate_
+Soulseek account for Track Manager to avoid connection conflicts, and keep
+sharing from your regular client.
 
 ## Configuration
 
@@ -276,7 +333,7 @@ YouTube breaks extractors often. This is almost always an outdated yt-dlp, stale
 
 1. Update yt-dlp: `pip install -U 'yt-dlp[default]'` (needs 2026.8.19+)
 2. Install Deno if you don't have it: `brew install deno` (solves YouTube JS challenges)
-3. If `youtube.cookies_from_browser` is set, re-login to YouTube in that browser, or clear the setting unless the video is age-restricted. Stale cookies make 403s *more* likely.
+3. If `youtube.cookies_from_browser` is set, re-login to YouTube in that browser, or clear the setting unless the video is age-restricted. Stale cookies make 403s _more_ likely.
 4. Leave `youtube.player_clients` empty so yt-dlp can pick current defaults
 5. Run `tm check-setup` to confirm versions
 
@@ -304,6 +361,24 @@ YouTube breaks extractors often. This is almost always an outdated yt-dlp, stale
 - SoundCloud requires the track to be publicly accessible
 - Private tracks or sets cannot be downloaded
 - Some tracks may have download disabled by the artist
+
+### Instagram Issues
+
+**Problem:** "login required" / empty media / redirected to the login page
+
+**Solution:** Instagram blocks most anonymous downloads. Set
+`instagram.cookies_from_browser` (or `instagram.cookies_file`) and log in to
+Instagram in that browser. Re-login if cookies go stale.
+
+**Problem:** Profile URL is rejected
+
+**Solution:** Pass a reel or post URL (`/reel/SHORTCODE` or `/p/SHORTCODE`),
+not `instagram.com/username`.
+
+**Problem:** Artist/title tags look like a caption
+
+**Solution:** Instagram has no ISRC or track metadata. Downloads are flagged
+for `tracks-metadata-review.csv`. Edit and run `track-manager apply-metadata`.
 
 ### Metadata Issues
 

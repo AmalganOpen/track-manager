@@ -13,6 +13,13 @@ Quality codes: 27=FLAC 16-bit, 7=FLAC 24-bit, 6=MP3 320, 5=MP3 lower.
 The community proxies typically expose 27 reliably; higher tiers depend
 on the operator's Qobuz subscription level.
 
+**Preview trap:** when the operator's subscription is dead/degraded, the
+proxy still returns HTTP 200 — but the CDN URL has ``fmt=5`` (MP3) and
+the body is a ~30-second free-tier sample. We detect that both from the
+URL and by comparing probed duration against the catalogue ``duration``,
+and treat it as a hard failure so callers can fall through to
+YouTube/SoundCloud instead of shipping a truncated track.
+
 This currently uses a single-endpoint setup because only one proxy in the
 wild (qobuz2.kennyy.com.br) actually responds today; if more come online
 we can add rotation similar to tidal_public._fetch_instances().
@@ -29,9 +36,11 @@ import sys
 import time
 from pathlib import Path
 from typing import Dict, Optional
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from .audio_guards import is_preview_audio
 from .rate_limiter import tidal_rate_limit  # reuse the global music-API rate limiter
 
 _CACHE_DIR = (
@@ -44,9 +53,37 @@ _CACHE_FILE = _CACHE_DIR / "qobuz_id_cache.json"
 # the sweet spot — universally available, lossless, and matches CD quality.
 _QUALITY_FLAC = 27
 
+# Qobuz CDN `fmt` query values (observed on akamaized.net stream URLs):
+#   5 = MP3 (also what the free/sample path serves as a ~30s preview)
+#   6 = FLAC 16-bit/44.1
+#   7 = hi-res FLAC
+# When we request quality=27 and the CDN URL comes back as fmt=5, the
+# operator's subscription has degraded to the preview path.
+_CDN_FMT_MP3 = "5"
 # Browser-like UA: Cloudflare in front of the community proxy rejects
 # some non-browser agents. Keep this generic — no OS fingerprint.
 _USER_AGENT = "Mozilla/5.0 (compatible; track-manager/1.0; +https://github.com/gptme)"
+
+
+def _cdn_fmt(url: str) -> Optional[str]:
+    """Return the Qobuz CDN ``fmt`` query value from a stream URL, if any."""
+    try:
+        fmt = parse_qs(urlparse(url).query).get("fmt")
+        return fmt[0] if fmt else None
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def is_preview_cdn_url(url: str, requested_quality: int = _QUALITY_FLAC) -> bool:
+    """True if a download URL is the free-tier MP3 sample path.
+
+    Asking for lossless (quality ≥ 7, including our default 27) should
+    never yield ``fmt=5``. When it does, the proxy silently fell back to
+    a ~30-second preview instead of failing loudly.
+    """
+    if requested_quality < 7:
+        return False
+    return _cdn_fmt(url) == _CDN_FMT_MP3
 
 
 class QobuzPublicClient:
@@ -239,7 +276,10 @@ class QobuzPublicClient:
         """Search Qobuz by ISRC and download the first match to `output_path`.
 
         Returns the Qobuz track metadata dict on success (so the caller
-        can build a metadata doc), None on any failure.
+        can build a metadata doc), None on any failure — including when
+        the proxy silently returns a ~30s free-tier preview instead of
+        the full track (we refuse those so the caller can fall through
+        to YouTube/SoundCloud rather than shipping a truncated file).
         """
         track = self.search_by_isrc(isrc)
         if not track:
@@ -252,6 +292,26 @@ class QobuzPublicClient:
         if not url:
             return None
 
+        # Fast-fail before downloading: lossless request came back as the
+        # MP3 sample path (fmt=5). Same root cause as the duration check
+        # below, but this saves a round-trip and fails with a clearer clue.
+        if is_preview_cdn_url(url, requested_quality=_QUALITY_FLAC):
+            print(
+                "⚠️ Qobuz returned a preview/sample URL (CDN fmt=5) for a "
+                "lossless request — operator subscription likely degraded; "
+                "skipping",
+                file=sys.stderr,
+            )
+            return None
+
+        expected_duration: Optional[float] = None
+        raw_dur = track.get("duration")
+        if raw_dur is not None:
+            try:
+                expected_duration = float(raw_dur)
+            except (TypeError, ValueError):
+                expected_duration = None
+
         try:
             t0 = time.time()
             print("⬇️ Downloading from Qobuz (lossless FLAC)...")
@@ -262,7 +322,6 @@ class QobuzPublicClient:
                 for chunk in r.iter_content(chunk_size=65536):
                     f.write(chunk)
             print(f"   {output_path.stat().st_size:,} bytes in {time.time() - t0:.1f}s")
-            return track
         except requests.RequestException as e:
             print(f"❌ Qobuz audio fetch failed: {e}", file=sys.stderr)
             try:
@@ -270,3 +329,22 @@ class QobuzPublicClient:
             except OSError:
                 pass
             return None
+
+        # Duration check: refuse ~30s previews (and other truncations)
+        # so we never promote a sample into the library as a full track.
+        is_preview, actual = is_preview_audio(output_path, expected_duration)
+        if is_preview:
+            actual_s = f"{actual:.1f}s" if actual is not None else "unknown"
+            expected_s = f"{expected_duration:.0f}s" if expected_duration else "unknown"
+            print(
+                f"⚠️ Qobuz returned a preview/truncated file "
+                f"({actual_s} vs expected {expected_s}) — skipping",
+                file=sys.stderr,
+            )
+            try:
+                output_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+
+        return track

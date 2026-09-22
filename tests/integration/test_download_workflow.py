@@ -79,6 +79,18 @@ class TestDownloadWorkflow:
             # Verify download was attempted
             mock_dl.assert_called_once()
 
+    def test_instagram_download_workflow(
+        self, test_config, temp_output_dir, mock_ytdlp_download, create_test_audio_file
+    ):
+        """Test complete Instagram download workflow."""
+        downloader = Downloader(test_config, temp_output_dir)
+
+        with patch(
+            "track_manager.sources.instagram.InstagramDownloader.download"
+        ) as mock_dl:
+            downloader.download("https://www.instagram.com/reel/Chunk8-jurw/", "auto")
+            mock_dl.assert_called_once()
+
     def test_direct_url_download_workflow(
         self,
         test_config,
@@ -105,6 +117,7 @@ class TestDownloadWorkflow:
             ("https://www.youtube.com/watch?v=123", "youtube"),
             ("https://youtu.be/123", "youtube"),
             ("https://soundcloud.com/artist/track", "soundcloud"),
+            ("https://www.instagram.com/reel/Chunk8-jurw/", "instagram"),
             ("https://example.com/audio.mp3", "direct"),
         ]
 

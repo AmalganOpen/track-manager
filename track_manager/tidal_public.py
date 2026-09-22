@@ -27,7 +27,8 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
 
-from .rate_limiter import songlink_note_throttle, songlink_rate_limit, tidal_rate_limit
+from .rate_limiter import tidal_rate_limit
+from .songlink import fetch_links
 
 _CACHE_DIR = (
     Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "track-manager"
@@ -146,7 +147,11 @@ class TidalPublicClient:
     the rest of the process so subsequent calls skip rotation.
     """
 
-    def __init__(self, bypass_cache: bool = False):
+    def __init__(
+        self,
+        bypass_cache: bool = False,
+        songlink_api_key: Optional[str] = None,
+    ):
         """Initialize TIDAL public client.
 
         Args:
@@ -157,6 +162,9 @@ class TidalPublicClient:
                           region change, etc.). Delete
                           `~/.cache/track-manager/tidal_id_cache.json`
                           to throw the cache away permanently.
+            songlink_api_key: Optional Odesli API key sent as the ``key``
+                          query param. Unauthenticated lookups are still
+                          attempted when this is unset.
 
         Note: the endpoint pools come from monochrome.tf/instances.json
         (with disk-cached + hardcoded fallbacks); there's no
@@ -176,6 +184,7 @@ class TidalPublicClient:
         )
 
         self.bypass_cache = bypass_cache
+        self.songlink_api_key = songlink_api_key
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "track-manager/0.2.0"})
 
@@ -243,79 +252,20 @@ class TidalPublicClient:
         except OSError:
             pass  # non-fatal
 
-    # Cap total time we'll spend on a single song.link lookup (cooldown +
-    # in-call retries combined). Beyond this, fall back to YouTube — better
-    # to take a YouTube rip than hang the whole batch on one track.
-    _SONGLINK_MAX_WAIT_PER_CALL = 45.0
-
     def _songlink_request(self, params: dict, max_retries: int = 1) -> Optional[dict]:
         """Make a rate-limited request to the song.link API.
 
-        On 429 we honour the `Retry-After` header (capped) and retry once.
-        The local rate limiter (`songlink_rate_limit`) already enforces a
-        persistent cooldown across calls/processes, so additional in-call
-        backoff stacking just wastes wall time before the inevitable
-        YouTube fallback.
-
-        Args:
-            params: Query parameters dict
-            max_retries: How many times to retry on 429 before giving up
-
-        Returns:
-            Parsed JSON response or None on failure
+        Delegates to ``songlink.fetch_links`` so API-key handling, the
+        PUBLIC_API_ACCESS_DEPRECATED circuit breaker, and 429 retry live in
+        one place.
         """
-        for attempt in range(max_retries + 1):
-            try:
-                songlink_rate_limit()
-                response = self.session.get(
-                    "https://api.song.link/v1-alpha.1/links",
-                    params=params,
-                    timeout=10,
-                )
-                if response.status_code == 429:
-                    retry_after = response.headers.get("Retry-After")
-                    try:
-                        wait = float(retry_after) if retry_after else 30.0
-                    except ValueError:
-                        wait = 30.0
-                    # Always persist the cooldown so other tracks in this run
-                    # (and follow-up `tm` invocations) wait it out instead of
-                    # immediately tripping another 429.
-                    songlink_note_throttle(wait)
-                    if (
-                        attempt >= max_retries
-                        or wait > self._SONGLINK_MAX_WAIT_PER_CALL
-                    ):
-                        print(
-                            f"⚠️ song.link 429 (Retry-After {wait:.0f}s); skipping TIDAL for this track",
-                            file=sys.stderr,
-                        )
-                        return None
-                    print(
-                        f"⏳ song.link 429; sleeping {wait:.1f}s before single retry...",
-                        file=sys.stderr,
-                    )
-                    time.sleep(wait)
-                    continue
-                if response.status_code == 400:
-                    try:
-                        detail = response.json().get("message") or response.text[:120]
-                    except Exception:
-                        detail = response.text[:120]
-                    msg = "Track not indexed by song.link"
-                    if detail:
-                        msg += f" ({detail})"
-                    print(f"ℹ️ {msg}", file=sys.stderr)
-                    return None
-                response.raise_for_status()
-                return response.json()
-            except requests.RequestException as e:
-                print(f"⚠️ song.link lookup failed: {e}", file=sys.stderr)
-                return None
-            except (ValueError, KeyError) as e:
-                print(f"⚠️ song.link parsing failed: {e}", file=sys.stderr)
-                return None
-        return None
+        return fetch_links(
+            params,
+            api_key=self.songlink_api_key,
+            session=self.session,
+            timeout=10,
+            max_retries=max_retries,
+        )
 
     @staticmethod
     def _extract_tidal_id_from_response(data: dict) -> Optional[str]:

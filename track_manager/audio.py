@@ -1211,6 +1211,11 @@ def apply_basic_tags(
     Always idempotent: existing basic tags are cleared first so re-applying
     cannot accumulate duplicates. The track-manager blob is left untouched.
     """
+    if cover_data:
+        from .cover import prepare_cover_jpeg
+
+        cover_data = prepare_cover_jpeg(cover_data)
+
     suffix = path.suffix.lower()
     if suffix in (".m4a", ".mp4"):
         _apply_m4a_tags(path, doc, cover_data)
@@ -1365,9 +1370,12 @@ def thumbnail_to_jpeg(path: Path) -> Optional[bytes]:
     suffix = path.suffix.lower()
     if suffix in (".jpg", ".jpeg"):
         try:
-            return path.read_bytes()
+            raw = path.read_bytes()
         except OSError:
             return None
+        from .cover import prepare_cover_jpeg
+
+        return prepare_cover_jpeg(raw)
 
     if not shutil.which("ffmpeg"):
         return None
@@ -1388,6 +1396,10 @@ def thumbnail_to_jpeg(path: Path) -> Optional[bytes]:
             check=True,
             timeout=30,
         )
-        return out.stdout or None
+        if not out.stdout:
+            return None
+        from .cover import prepare_cover_jpeg
+
+        return prepare_cover_jpeg(out.stdout)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None

@@ -29,6 +29,7 @@ track-manager download <url>
 - **Spotify playlists/albums** - Require Spotify API credentials (optional)
 - **YouTube** - No credentials needed (via TIDAL)
 - **SoundCloud** - No credentials needed (via TIDAL)
+- **Instagram** - Reel/post URLs; cookies usually required (not on song.link)
 - **Direct audio URLs** - No credentials needed
 
 **No Setup Required** - Works immediately for all sources except Spotify playlists
@@ -41,7 +42,7 @@ track-manager download <url>
 - URL from any supported platform
 
 **2. Source Detection**
-- Detect: Spotify / YouTube / SoundCloud / Direct
+- Detect: Spotify / YouTube / SoundCloud / Instagram / Direct
 
 **3. Smart Download (TIDAL Public API)**
 - URL → song.link → TIDAL ID
@@ -54,6 +55,7 @@ track-manager download <url>
 - Spotify (with credentials) → spotdl → YouTube (M4A ~130kbps)
 - Spotify (without credentials) → Try TIDAL via smart download
 - SoundCloud → yt-dlp (M4A ~256kbps)
+- Instagram → yt-dlp (AAC from the reel/post MP4; cookies usually required)
 - Direct → requests (preserve original)
 
 **5. Final Output**
@@ -79,7 +81,9 @@ def detect_source(url: str) -> str:
 - `spotify` - Spotify URLs
 - `youtube` - YouTube URLs (including youtu.be short links)
 - `soundcloud` - SoundCloud URLs
-- `direct` - Everything else (assumes direct audio URL)
+- `instagram` - Instagram reel/post/IGTV URLs
+- `direct` - Confirmed direct audio file URLs
+- `unknown` - Other platforms (Apple Music, Deezer, …) → song.link
 
 ### 2. Spotify API Handling (Optional)
 
@@ -378,6 +382,8 @@ elif source_type == "youtube":
     handler = YouTubeDownloader(config, output_dir)
 elif source_type == "soundcloud":
     handler = SoundCloudDownloader(config, output_dir)
+elif source_type == "instagram":
+    handler = InstagramDownloader(config, output_dir)
 else:
     handler = DirectDownloader(config, output_dir)
 
@@ -467,6 +473,7 @@ the source, and the smart-download path additionally treats an already-owned
 | Spotify (no credentials → smart download) | **Before** download — see *Smart-download dedup* below |
 | SoundCloud (yt-dlp fallback) | **Before** audio download (cheap metadata-only fetch) |
 | YouTube (yt-dlp fallback) | **Before** (metadata-only `extract_info` probe) + after-download backstop |
+| Instagram (yt-dlp) | **Before** (TRACK_URL + metadata-only probe) + after-download backstop |
 | Direct URLs | **Before** (by source URL) + after-download backstop |
 | Smart download (Qobuz / TIDAL) | **Before** download — see *Smart-download dedup* below |
 

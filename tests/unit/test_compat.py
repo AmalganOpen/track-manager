@@ -1,4 +1,4 @@
-"""Unit tests for CDJ-2000NXS compatibility classification."""
+"""Unit tests for Pioneer USB-player compatibility classification."""
 
 from pathlib import Path
 
@@ -8,11 +8,13 @@ from track_manager import compat, rekordbox_db
 from track_manager.migrate import BACKUP_DIRNAME
 
 
-def _classify(monkeypatch, path: str, stream: dict | None) -> compat.CompatResult:
+def _classify(
+    monkeypatch, path: str, stream: dict | None, *, gear=None
+) -> compat.CompatResult:
     """Classify ``path`` with ffprobe stubbed to return ``stream``."""
     monkeypatch.setattr(compat.shutil, "which", lambda _name: "/usr/bin/ffprobe")
     monkeypatch.setattr(compat, "_probe", lambda _p: stream)
-    return compat.classify(Path(path))
+    return compat.classify(Path(path), gear=gear)
 
 
 @pytest.mark.parametrize(
@@ -112,6 +114,128 @@ def test_classify_combines_format_and_filename_issues(monkeypatch):
     assert result.unknown is False
     assert "FLAC" in result.reason
     assert "filename:" in result.reason
+
+
+def _stub_cover(monkeypatch, info) -> None:
+    """Skip reading a real file; inject ``info`` (None = no cover)."""
+    monkeypatch.setattr(
+        "track_manager.cover.extract_embedded_cover",
+        lambda _p: b"jpeg" if info is not None else None,
+    )
+    monkeypatch.setattr(
+        "track_manager.cover.jpeg_info",
+        lambda _data: info,
+    )
+
+
+def test_classify_ok_cover_under_cap(monkeypatch):
+    from track_manager.cover import CoverInfo
+
+    _stub_cover(monkeypatch, CoverInfo(640, 640, False, 1000))
+    result = _classify(
+        monkeypatch,
+        "ok.aiff",
+        {"codec_name": "pcm_s16be", "sample_rate": "44100"},
+    )
+    assert result.compatible is True
+
+
+def test_classify_rejects_oversized_cover(monkeypatch):
+    from track_manager.cover import CoverInfo
+
+    _stub_cover(monkeypatch, CoverInfo(3000, 3000, False, 3_000_000))
+    result = _classify(
+        monkeypatch,
+        "huge.aiff",
+        {"codec_name": "pcm_s16be", "sample_rate": "44100"},
+    )
+    assert result.compatible is False
+    assert result.unknown is False
+    assert "cover:" in result.reason
+    assert "3000" in result.reason
+    assert "scale-covers" in result.reason
+
+
+def test_classify_rejects_progressive_cover(monkeypatch):
+    from track_manager.cover import CoverInfo
+
+    _stub_cover(monkeypatch, CoverInfo(500, 500, True, 20_000))
+    result = _classify(
+        monkeypatch,
+        "prog.aiff",
+        {"codec_name": "pcm_s16be", "sample_rate": "44100"},
+    )
+    assert result.compatible is False
+    assert "progressive JPEG" in result.reason
+
+
+def test_classify_combines_cover_and_filename(monkeypatch):
+    from track_manager.cover import CoverInfo
+
+    _stub_cover(monkeypatch, CoverInfo(1280, 1280, False, 100_000))
+    result = _classify(
+        monkeypatch,
+        "Song: Remix.aiff",
+        {"codec_name": "pcm_s16be", "sample_rate": "44100"},
+    )
+    assert result.compatible is False
+    assert "filename:" in result.reason
+    assert "cover:" in result.reason
+
+
+def test_flac_fails_only_nxs(monkeypatch):
+    result = _classify(
+        monkeypatch, "a.flac", {"codec_name": "flac", "sample_rate": "44100"}
+    )
+    assert result.compatible is False
+    names = {name for name, _reason in result.failures}
+    assert names == {"CDJ-2000NXS"}
+    assert "XDJ-1000MK2" not in result.reason
+
+
+def test_flac_ok_on_xdj_1000mk2(monkeypatch):
+    result = _classify(
+        monkeypatch,
+        "a.flac",
+        {"codec_name": "flac", "sample_rate": "44100"},
+        gear=["xdj-1000mk2"],
+    )
+    assert result.compatible is True
+
+
+def test_96k_pcm_fails_nxs_and_xdj_ok_on_3000(monkeypatch):
+    stream = {"codec_name": "pcm_s16be", "sample_rate": "96000"}
+    default = _classify(monkeypatch, "hi.aiff", stream)
+    assert default.compatible is False
+    names = {name for name, _reason in default.failures}
+    assert names == {"CDJ-2000NXS", "XDJ-1000MK2"}
+
+    on_3000 = _classify(monkeypatch, "hi.aiff", stream, gear=["cdj-3000"])
+    assert on_3000.compatible is True
+
+    on_nxs2 = _classify(monkeypatch, "hi.aiff", stream, gear=["nxs2"])
+    assert on_nxs2.compatible is True
+
+
+def test_cover_fails_only_xdj_1000mk2(monkeypatch):
+    from track_manager.cover import CoverInfo
+
+    _stub_cover(monkeypatch, CoverInfo(3000, 3000, False, 3_000_000))
+    result = _classify(
+        monkeypatch,
+        "huge.aiff",
+        {"codec_name": "pcm_s16be", "sample_rate": "44100"},
+    )
+    names = {name for name, _reason in result.failures}
+    assert names == {"XDJ-1000MK2"}
+    assert "XDJ-1000MK2" in result.reason
+
+
+def test_resolve_devices_aliases_and_unknown():
+    specs = compat.resolve_devices(["nxs", "xdj-1000 mk2"])
+    assert [s.id for s in specs] == ["cdj-2000nxs", "xdj-1000mk2"]
+    with pytest.raises(ValueError, match="unknown player"):
+        compat.resolve_devices(["cdj-4000"])
 
 
 def test_target_aiff_path_backup_resolves_to_library_root():

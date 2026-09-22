@@ -59,6 +59,35 @@ youtube:
   # See: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
   po_token: ""
 
+# Instagram configuration (OPTIONAL)
+# Reels and most posts need a logged-in session. Provide either a path to a
+# cookies.txt file (Netscape format), or the name of a browser to import
+# cookies from (chrome, firefox, safari, brave, edge, ...).
+#
+# If cookies_from_browser is empty, youtube.cookies_from_browser is reused
+# (browser cookies include Instagram when you are logged in there).
+#
+# See: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
+instagram:
+  cookies_file: ""
+  cookies_from_browser: ""
+
+# Soulseek (optional lossless fallback via sockseek CLI)
+# No signup page: pick a unique username/password; first login creates the
+# account. Requires `sockseek` (formerly sldl) on PATH:
+# https://github.com/fiso64/sockseek/releases
+# Enabled only when both username and password are set. Runs after public
+# Qobuz/TIDAL proxies fail, before YouTube/spotdl fallback.
+# Etiquette: sockseek does not share files — if you already run Nicotine+/slskd,
+# use a *separate* Soulseek account here to avoid connection conflicts.
+soulseek:
+  username: ""
+  password: ""
+  # Optional path to the binary (default: find sockseek or sldl on PATH)
+  binary: ""
+  timeout_seconds: 180
+  length_tol_seconds: 3
+
 # DAB Music (LEGACY - currently unused)
 # Note: DAB Music service is currently unavailable
 # High-quality FLAC downloads now use public TIDAL API (no credentials required)
@@ -71,15 +100,18 @@ dabmusic:
 
 # song.link / Odesli API configuration
 # song.link is used to resolve track URLs → TIDAL IDs for lossless downloads.
-# Rate limit: 10 requests/minute (unauthenticated free tier).
-# Spotify downloads use the ISRC platform endpoint (?platform=isrc&type=song&id=...)
-# which has a separate rate limit bucket from URL-based lookups.
+# Auth is optional: no key is required. If you have one, it is sent as the
+# `key` query param for higher rate limits (email developers@song.link).
+# The live API currently returns 401 PUBLIC_API_ACCESS_DEPRECATED without a
+# key; when that happens remaining lookups this run are skipped.
 # Successful lookups are cached in ~/.cache/track-manager/ to minimise API calls.
 songlink:
+  api_key: ""
+
   # Request timeout in seconds (default: 20)
   timeout: 20
 
-  # Maximum retry attempts on failure (default: 3)
+  # Maximum retry attempts on 429 (default: 3)
   max_retries: 3
 
 # Download preferences

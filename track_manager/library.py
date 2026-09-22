@@ -14,11 +14,17 @@ AUDIO_EXTENSIONS = {".aiff", ".aif", ".m4a", ".mp4", ".mp3"}
 
 
 def list_library_tracks(library_dir: Path) -> list[Path]:
-    """Return audio files directly under `library_dir` (non-recursive)."""
+    """Return audio files directly under `library_dir` (non-recursive).
+
+    Hidden files (``.tm_cover_*`` temps, ``.DS_Store``, …) are skipped so
+    in-progress atomic rewrites never get treated as library tracks.
+    """
     if not library_dir.is_dir():
         return []
     tracks: list[Path] = []
     for path in sorted(library_dir.iterdir()):
+        if path.name.startswith("."):
+            continue
         if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
             tracks.append(path)
     return tracks

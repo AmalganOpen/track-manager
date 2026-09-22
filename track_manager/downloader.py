@@ -11,11 +11,12 @@ from . import __version__
 from . import audio as tm_audio
 from . import blob as tm_blob
 from . import pipeline as tm_pipeline
+from . import songlink as tm_songlink
 from .config import Config
 from .metadata import sanitize_filename
 from .rate_limiter import dab_rate_limit, spotify_rate_limit
 from .songlink import SongLinkClient
-from .sources import direct, soundcloud, spotify, youtube
+from .sources import direct, instagram, soundcloud, spotify, youtube
 
 _TRACKING_PARAMS = {
     "si",
@@ -24,6 +25,8 @@ _TRACKING_PARAMS = {
     "utm_campaign",
     "utm_term",
     "utm_content",
+    "igsh",
+    "igshid",
 }
 
 # Smart-download dedup/upgrade tuning.
@@ -95,6 +98,17 @@ class Downloader:
             )
 
         return self._spotify_handler
+
+    def _get_tidal_client(self):
+        """Return (and cache) the TIDAL public client with the song.link key."""
+        from .tidal_public import TidalPublicClient
+
+        if not hasattr(self, "_tidal_client"):
+            self._tidal_client = TidalPublicClient(
+                bypass_cache=self.bypass_cache,
+                songlink_api_key=self.config.songlink_api_key,
+            )
+        return self._tidal_client
 
     def _has_spotify_credentials(self) -> bool:
         """Check if Spotify API credentials are available.
@@ -195,13 +209,17 @@ class Downloader:
             if spotify_id:
                 return self._get_isrc_from_spotify(spotify_id, return_metadata=True)
 
-        # Tier 2: Use song.link to find Spotify URL, then get ISRC
-        from .songlink import SongLinkClient
+        # Tier 2: Use song.link to find Spotify URL, then get ISRC.
+        # Skip when a prior 401 already marked song.link unusable, so we
+        # don't rate-limit wait on every remaining track.
+        if tm_songlink.is_disabled():
+            return None, None
 
         print("🔗 Looking up track on song.link...")
         songlink = SongLinkClient(
             timeout=self.config.songlink_timeout,
             max_retries=self.config.songlink_max_retries,
+            api_key=self.config.songlink_api_key,
         )
         spotify_url = songlink.find_spotify_url(url)
 
@@ -372,12 +390,8 @@ class Downloader:
         `_resolve_isrc_via_tidal`), the lookup phase is skipped and we go
         straight to the streaming download.
         """
-        from .tidal_public import TidalPublicClient
-
         try:
-            if not hasattr(self, "_tidal_client"):
-                self._tidal_client = TidalPublicClient(bypass_cache=self.bypass_cache)
-            client = self._tidal_client
+            client = self._get_tidal_client()
 
             if prefetched_track is not None:
                 track = prefetched_track
@@ -447,6 +461,121 @@ class Downloader:
 
         except Exception as e:
             print(f"⚠️ TIDAL error: {e}", file=sys.stderr)
+            return False
+
+    def _try_soulseek(
+        self,
+        url: str,
+        target_format: str,
+        spotify_metadata: Optional[dict] = None,
+        playlist_url: Optional[str] = None,
+        isrc: Optional[str] = None,
+    ) -> bool:
+        """Try Soulseek lossless FLAC via sockseek after public endpoints fail.
+
+        Requires configured Soulseek credentials and ``sockseek``/``sldl`` on
+        PATH. Match key is artist + title (+ optional duration); ISRC is kept
+        for provenance only. Returns True on success.
+        """
+        from .audio_guards import is_preview_audio
+        from .soulseek import (
+            SoulseekClient,
+            extract_artist_title,
+            extract_duration_seconds,
+            find_sockseek_binary,
+        )
+
+        if not self.config.soulseek_enabled:
+            print("ℹ️ Skipping Soulseek (not configured)", file=sys.stderr)
+            return False
+
+        if find_sockseek_binary(self.config) is None:
+            print("ℹ️ sockseek not found on PATH", file=sys.stderr)
+            return False
+
+        artist, title = extract_artist_title(spotify_metadata)
+        if not artist or not title:
+            print(
+                "ℹ️ Skipping Soulseek (need artist + title from metadata)",
+                file=sys.stderr,
+            )
+            return False
+
+        duration_s = extract_duration_seconds(spotify_metadata)
+
+        try:
+            print(f"🎵 Searching Soulseek: {artist} – {title}...")
+            client = SoulseekClient(self.config)
+            # Download into a per-track temp dir under output_dir so we can
+            # clean up leftovers easily after finalize.
+            temp_dir = (
+                self.output_dir / f".tmp_soulseek_{sanitize_filename(title)[:40]}"
+            )
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            downloaded = client.download_track(
+                artist,
+                title,
+                duration_s=duration_s,
+                output_dir=temp_dir,
+            )
+            if not downloaded:
+                print("ℹ️ Track not available via Soulseek")
+                return False
+
+            is_preview, actual = is_preview_audio(downloaded, duration_s)
+            if is_preview:
+                expected_note = f"{duration_s:.0f}s" if duration_s else "unknown"
+                actual_note = f"{actual:.0f}s" if actual else "unknown"
+                print(
+                    f"⚠️ Soulseek match failed duration check "
+                    f"(got {actual_note}, expected ~{expected_note})",
+                    file=sys.stderr,
+                )
+                try:
+                    downloaded.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return False
+
+            probed = tm_audio.probe_audio(downloaded)
+            original_format = probed.get("codec")
+            original_bitrate = probed.get("bitrate_kbps")
+
+            doc = self._build_soulseek_doc(
+                artist=artist,
+                title=title,
+                isrc=isrc,
+                spotify_metadata=spotify_metadata,
+                track_url=url,
+                playlist_url=playlist_url,
+                original_format=original_format,
+                original_bitrate=original_bitrate,
+                duration_seconds=actual if actual is not None else duration_s,
+            )
+            final_path = self._finalize_download(downloaded, doc, target_format)
+            if final_path is None:
+                print("❌ Soulseek post-processing failed", file=sys.stderr)
+                return False
+
+            # Best-effort cleanup of the temp download dir.
+            try:
+                for leftover in temp_dir.rglob("*"):
+                    if leftover.is_file():
+                        leftover.unlink(missing_ok=True)
+                temp_dir.rmdir()
+            except OSError:
+                pass
+
+            print(
+                f"✅ Downloaded Soulseek ({original_format or 'unknown'}"
+                f"{f' {original_bitrate}k' if original_bitrate else ''})"
+                f" → {final_path.suffix.upper()[1:]}: {final_path}"
+            )
+            print()
+            return True
+
+        except Exception as e:
+            print(f"⚠️ Soulseek error: {e}", file=sys.stderr)
             return False
 
     # ------------------------------------------------------------------
@@ -615,6 +744,57 @@ class Downloader:
 
         return doc
 
+    def _build_soulseek_doc(
+        self,
+        *,
+        artist: str,
+        title: str,
+        isrc: Optional[str],
+        spotify_metadata: Optional[dict],
+        track_url: str,
+        playlist_url: Optional[str],
+        original_format: Optional[str],
+        original_bitrate: Optional[int],
+        duration_seconds: Optional[float] = None,
+    ) -> dict:
+        """Construct the canonical metadata document for a Soulseek download.
+
+        Spotify display fields / ISRC win when known; Soulseek itself has no
+        structured catalogue payload beyond the matched file.
+        """
+        doc = tm_blob.empty_document()
+
+        if spotify_metadata:
+            artists = list(spotify_metadata.get("artists") or [])
+            if artists:
+                doc["track"]["artists"] = artists
+                doc["track"]["artist_string"] = ", ".join(artists)
+            doc["track"]["title"] = spotify_metadata.get("title") or title
+            doc["track"]["album"] = spotify_metadata.get("album")
+        if not doc["track"]["title"]:
+            doc["track"]["title"] = title
+        if not doc["track"]["artists"]:
+            doc["track"]["artists"] = [artist]
+            doc["track"]["artist_string"] = artist
+
+        if isrc:
+            doc["track"]["isrc"] = isrc
+        if duration_seconds is not None:
+            try:
+                doc["track"]["duration_seconds"] = float(duration_seconds)
+            except (TypeError, ValueError):
+                pass
+
+        doc["provenance"]["track_url"] = track_url
+        doc["provenance"]["playlist_url"] = playlist_url
+        doc["provenance"]["source"] = "soulseek"
+        doc["provenance"]["original_format"] = original_format
+        doc["provenance"]["original_bitrate"] = original_bitrate
+        doc["provenance"]["downloaded_at"] = datetime.now(timezone.utc).isoformat()
+        doc["provenance"]["tool_version"] = __version__
+
+        return doc
+
     def _build_dab_doc(
         self,
         track: dict,
@@ -700,7 +880,8 @@ class Downloader:
             url: URL to analyze
 
         Returns:
-            Source type: 'spotify', 'youtube', 'soundcloud', or 'direct'
+            Source type: 'spotify', 'youtube', 'soundcloud', 'instagram',
+            'direct', or 'unknown'
 
         Raises:
             ValueError: If URL is invalid or not supported
@@ -731,6 +912,8 @@ class Downloader:
             return "youtube"
         elif "soundcloud.com" in domain:
             return "soundcloud"
+        elif "instagram.com" in domain or "instagr.am" in domain:
+            return "instagram"
         else:
             # Check if it looks like a direct audio file URL
             parsed_path = parsed.path.lower()
@@ -824,7 +1007,7 @@ class Downloader:
             if handled:
                 return True
 
-        # Smart-download chain (lossless first) — TEMPORARILY DISABLED.
+        # Smart-download chain (lossless first):
         #   1) Qobuz public proxy — DISABLED. qobuz2.kennyy.com.br is
         #      degraded (preview/sample responses); re-enable when the
         #      operator subscription recovers.
@@ -832,8 +1015,9 @@ class Downloader:
         #      pool has been in a near-permanent OAuth blackout (every
         #      /track/ host 401/403/PREVIEW). Kept for re-enable if the
         #      ecosystem recovers; see docs/tidal-endpoints.md.
+        #   3) Soulseek (sockseek) — optional; requires credentials + binary.
         # Falls through to YouTube/SoundCloud/spotdl in the caller.
-        # target_format = tm_audio.resolve_format(format)
+        target_format = tm_audio.resolve_format(format)
         # if self._try_qobuz_public(
         #     url,
         #     target_format,
@@ -842,14 +1026,23 @@ class Downloader:
         #     isrc=isrc,
         # ):
         #     return True
-        # return self._try_tidal_public(
+        # if self._try_tidal_public(
         #     url,
         #     target_format,
         #     spotify_metadata,
         #     playlist_url=playlist_url,
         #     isrc=isrc,
         #     prefetched_track=None,  # or reuse ISRC-lookup track if captured above
-        # )
+        # ):
+        #     return True
+        if self._try_soulseek(
+            url,
+            target_format,
+            spotify_metadata,
+            playlist_url=playlist_url,
+            isrc=isrc,
+        ):
+            return True
         return False
 
     def _find_owned_copy(self, url: str, isrc: Optional[str]) -> Optional[Path]:
@@ -969,11 +1162,10 @@ class Downloader:
         `_try_tidal_public` and skip the redundant fetch.
         """
         try:
-            from .tidal_public import TidalPublicClient
+            if tm_songlink.is_disabled():
+                return None, None
 
-            if not hasattr(self, "_tidal_client"):
-                self._tidal_client = TidalPublicClient(bypass_cache=self.bypass_cache)
-            client = self._tidal_client
+            client = self._get_tidal_client()
 
             print("🔍 Resolving ISRC via TIDAL...")
             tidal_id = client.get_tidal_id_from_url(url)
@@ -1100,6 +1292,8 @@ class Downloader:
             handler = soundcloud.SoundCloudDownloader(
                 self.config, self.output_dir, self
             )
+        elif source_type == "instagram":
+            handler = instagram.InstagramDownloader(self.config, self.output_dir, self)
         elif source_type == "unknown":
             # Unrecognized platform (Apple Music, Deezer, etc.)
             # Try smart download via song.link → TIDAL
@@ -1113,7 +1307,7 @@ class Downloader:
                     "❌ Platform not recognized and not found on TIDAL", file=sys.stderr
                 )
                 print(
-                    "   Supported: Spotify, YouTube, SoundCloud, or direct audio URLs",
+                    "   Supported: Spotify, YouTube, SoundCloud, Instagram, or direct audio URLs",
                     file=sys.stderr,
                 )
                 self._log_failure(url, "Unknown platform, not available via TIDAL")

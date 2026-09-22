@@ -6,7 +6,7 @@ This directory contains integration tests for Track Manager. These tests verify 
 
 ### test_download_workflow.py
 Tests complete download workflows from URL to file creation:
-- Source detection (Spotify, YouTube, SoundCloud, Direct URLs)
+- Source detection (Spotify, YouTube, SoundCloud, Instagram, Direct URLs)
 - Routing to correct handlers
 - Format selection (auto, mp3, m4a)
 - Custom output directories

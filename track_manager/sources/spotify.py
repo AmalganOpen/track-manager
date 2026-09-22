@@ -214,6 +214,13 @@ class SpotifyDownloader(BaseDownloader):
                             "title": song.name,
                             "album": song.album_name,
                         }
+                        if getattr(song, "duration", None) is not None:
+                            try:
+                                spotify_metadata["duration_seconds"] = float(
+                                    song.duration
+                                )
+                            except (TypeError, ValueError):
+                                pass
 
                         smart_success = self.parent_downloader.try_smart_download(
                             song.url,

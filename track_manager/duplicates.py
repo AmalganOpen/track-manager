@@ -17,6 +17,8 @@ _TRACKING_QUERY_PARAMS = {
     "utm_campaign",
     "utm_term",
     "utm_content",
+    "igsh",
+    "igshid",
 }
 
 _YOUTUBE_HOSTS = {
@@ -25,6 +27,14 @@ _YOUTUBE_HOSTS = {
     "music.youtube.com",
     "youtube-nocookie.com",
 }
+
+_INSTAGRAM_HOSTS = {
+    "instagram.com",
+    "m.instagram.com",
+    "instagr.am",
+}
+
+_INSTAGRAM_MEDIA_KINDS = {"p", "tv", "reel", "reels"}
 
 # All audio formats we recognise when scanning the library for duplicates.
 # AIFF is included because it's the default download format; MP4-style
@@ -187,6 +197,22 @@ def normalize_metadata(artist: Optional[str], title: Optional[str]) -> Tuple[str
     return normalize_text(artist or ""), normalize_text(title or "")
 
 
+def _canonical_instagram_url(path: str) -> Optional[str]:
+    """Map reel/post/IGTV paths to ``https://instagram.com/p/<shortcode>``.
+
+    Share links and stories keep their own shape (ids are not shortcodes).
+    """
+    parts = [p for p in path.split("/") if p]
+    shortcode: Optional[str] = None
+    if len(parts) >= 2 and parts[0].lower() in _INSTAGRAM_MEDIA_KINDS:
+        shortcode = parts[1]
+    elif len(parts) >= 3 and parts[1].lower() in _INSTAGRAM_MEDIA_KINDS:
+        shortcode = parts[2]
+    if shortcode:
+        return f"https://instagram.com/p/{shortcode}"
+    return None
+
+
 def normalize_track_url(track_url: str) -> str:
     """Normalize a track URL for identity comparison.
 
@@ -228,6 +254,10 @@ def normalize_track_url(track_url: str) -> str:
             list_id = (qs.get("list") or [None])[0]
             if list_id:
                 return f"https://youtube.com/playlist?list={list_id}"
+    elif host in _INSTAGRAM_HOSTS:
+        instagram = _canonical_instagram_url(path)
+        if instagram:
+            return instagram
 
     filtered = {
         key: values

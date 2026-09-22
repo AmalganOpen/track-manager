@@ -134,6 +134,53 @@ class Config:
         return self.get("dabmusic.endpoint", "https://dabmusic.xyz")
 
     @property
+    def soulseek_username(self) -> Optional[str]:
+        """Soulseek username (empty/None disables Soulseek fallback)."""
+        value = self.get("soulseek.username", "")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    @property
+    def soulseek_password(self) -> Optional[str]:
+        """Soulseek password (empty/None disables Soulseek fallback)."""
+        value = self.get("soulseek.password", "")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    @property
+    def soulseek_binary(self) -> Optional[str]:
+        """Optional explicit path to sockseek/sldl (else search PATH)."""
+        value = self.get("soulseek.binary", "")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    @property
+    def soulseek_timeout_seconds(self) -> int:
+        """Subprocess timeout for a single Soulseek download."""
+        raw = self.get("soulseek.timeout_seconds", 180)
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            return 180
+
+    @property
+    def soulseek_length_tol_seconds(self) -> int:
+        """Allowed duration delta (seconds) when matching Soulseek results."""
+        raw = self.get("soulseek.length_tol_seconds", 3)
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 3
+
+    @property
+    def soulseek_enabled(self) -> bool:
+        """True when Soulseek credentials are configured."""
+        return bool(self.soulseek_username and self.soulseek_password)
+
+    @property
     def youtube_cookies_file(self) -> Optional[str]:
         """Path to Netscape-format cookies.txt for YouTube (age-restricted videos)."""
         path = self.get("youtube.cookies_file", "")
@@ -167,6 +214,25 @@ class Config:
         return token if token else None
 
     @property
+    def instagram_cookies_file(self) -> Optional[str]:
+        """Path to Netscape-format cookies.txt for Instagram."""
+        path = self.get("instagram.cookies_file", "")
+        return path if path else None
+
+    @property
+    def instagram_cookies_from_browser(self) -> Optional[str]:
+        """Browser to import Instagram cookies from.
+
+        Falls back to ``youtube.cookies_from_browser`` when unset: browser
+        cookies cover every site, so a profile already logged into Instagram
+        authenticates reels without a second setting.
+        """
+        name = self.get("instagram.cookies_from_browser", "")
+        if name:
+            return name
+        return self.youtube_cookies_from_browser
+
+    @property
     def metadata_csv(self) -> Path:
         """Get metadata review CSV path."""
         csv_path = self.get("metadata_csv", "tracks-metadata-review.csv")
@@ -185,3 +251,21 @@ class Config:
     def songlink_max_retries(self) -> int:
         """Get song.link API max retry attempts."""
         return self.get("songlink.max_retries", 3)
+
+    @property
+    def songlink_api_key(self) -> Optional[str]:
+        """Odesli/song.link API key (optional).
+
+        Official docs: no key required; a valid key raises rate limits.
+        When set, it is sent as the ``key`` query param. Env vars
+        SONGLINK_API_KEY and ODESLI_API_KEY take precedence over
+        ``songlink.api_key`` / ``songlink.key`` in config.yaml.
+        """
+        for env_name in ("SONGLINK_API_KEY", "ODESLI_API_KEY"):
+            value = os.environ.get(env_name, "").strip()
+            if value:
+                return value
+        key = self.get("songlink.api_key") or self.get("songlink.key")
+        if isinstance(key, str) and key.strip():
+            return key.strip()
+        return None
