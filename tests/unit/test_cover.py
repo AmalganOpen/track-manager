@@ -252,3 +252,120 @@ def test_cli_rejects_file_as_library(
     result = CliRunner().invoke(cli, ["scale-covers", "-y"])
     assert result.exit_code == 1
     assert "Library directory not found" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Keeping Rekordbox's cache honest after an in-place rewrite
+# ---------------------------------------------------------------------------
+
+
+def _library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    jpeg = _jpeg(tmp_path, 1200, 800)
+    path = _aiff_with_cover(tmp_path, jpeg, name="Song.aiff")
+
+    class _Cfg:
+        output_dir = tmp_path
+
+    monkeypatch.setattr("track_manager.cli.Config", lambda: _Cfg())
+    return path
+
+
+def test_cli_refuses_to_rewrite_while_rekordbox_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check must land before any file is touched, not after."""
+    from track_manager import rekordbox_db as tm_rb
+    from track_manager.cli import cli
+
+    path = _library(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        tm_rb,
+        "running_rekordbox_processes",
+        lambda: [tm_rb.RekordboxProcess(pid=42, command="/Applications/rekordbox")],
+    )
+
+    result = CliRunner().invoke(cli, ["scale-covers", "-y"])
+
+    assert result.exit_code == 1
+    assert "Rekordbox" in result.output
+    assert path.read_bytes() == before
+
+
+def test_cli_resyncs_after_scaling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from track_manager.cli import cli
+
+    _library(tmp_path, monkeypatch)
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "track_manager.cli._resync_rekordbox_cache", lambda: calls.append(1)
+    )
+
+    result = CliRunner().invoke(cli, ["scale-covers", "-y"])
+
+    assert result.exit_code == 0, result.output
+    assert "1200×800 → 640×427" in result.output
+    assert calls == [1]
+
+
+def test_cli_dry_run_neither_checks_nor_resyncs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from track_manager import rekordbox_db as tm_rb
+    from track_manager.cli import cli
+
+    _library(tmp_path, monkeypatch)
+
+    def _unexpected():
+        raise AssertionError("a dry run changes nothing, so it needs no check")
+
+    monkeypatch.setattr(tm_rb, "running_rekordbox_processes", _unexpected)
+    monkeypatch.setattr("track_manager.cli._resync_rekordbox_cache", _unexpected)
+
+    result = CliRunner().invoke(cli, ["scale-covers", "-n"])
+
+    assert result.exit_code == 0, result.output
+
+
+def test_cli_no_resync_warns_instead_of_going_quiet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opting out is allowed, but must not look like nothing is owed."""
+    from track_manager.cli import cli
+
+    _library(tmp_path, monkeypatch)
+
+    def _unexpected():
+        raise AssertionError("--no-resync must not resync")
+
+    monkeypatch.setattr("track_manager.cli._resync_rekordbox_cache", _unexpected)
+
+    result = CliRunner().invoke(cli, ["scale-covers", "-y", "--no-resync"])
+
+    assert result.exit_code == 0, result.output
+    assert "tm rekordbox-resync" in result.output
+
+
+def test_cli_skips_resync_when_nothing_was_scaled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from track_manager.cli import cli
+
+    jpeg = _jpeg(tmp_path, 100, 100)  # already under the cap
+    _aiff_with_cover(tmp_path, jpeg, name="Small.aiff")
+
+    class _Cfg:
+        output_dir = tmp_path
+
+    monkeypatch.setattr("track_manager.cli.Config", lambda: _Cfg())
+
+    def _unexpected():
+        raise AssertionError("nothing was rewritten, so nothing is out of sync")
+
+    monkeypatch.setattr("track_manager.cli._resync_rekordbox_cache", _unexpected)
+
+    result = CliRunner().invoke(cli, ["scale-covers", "-y"])
+
+    assert result.exit_code == 0, result.output

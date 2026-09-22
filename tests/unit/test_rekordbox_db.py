@@ -238,6 +238,7 @@ def test_only_real_rekordbox_binaries_count(cmd, expected):
     assert tm_rb._executable_is_rekordbox(cmd) is expected
 
 
+@pytest.mark.real_process_check
 def test_running_processes_ignores_command_line_mentions(monkeypatch):
     import subprocess
 
@@ -285,3 +286,80 @@ def test_repair_dry_run_neither_backs_up_nor_commits(tmp_path, monkeypatch):
     assert len(result.fixes) == 1
     assert result.committed is False
     assert result.backup_path is None
+
+
+# ---------------------------------------------------------------------------
+# The automatic resync that follows an in-place rewrite
+# ---------------------------------------------------------------------------
+
+
+def _run_auto_resync(capsys) -> str:
+    import track_manager.cli as tm_cli
+
+    tm_cli._resync_rekordbox_cache()
+    captured = capsys.readouterr()
+    return captured.out + captured.err
+
+
+def test_auto_resync_is_silent_without_rekordbox_installed(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(tm_rb, "MASTER_DB_PATH", tmp_path / "absent.db")
+
+    def _boom(*_a, **_k):
+        raise AssertionError("must not reach the database")
+
+    monkeypatch.setattr(tm_rb, "repair_content_metadata", _boom)
+
+    assert _run_auto_resync(capsys) == ""
+
+
+def test_auto_resync_warns_but_does_not_fail_the_rewrite(tmp_path, monkeypatch, capsys):
+    """The rewrite already succeeded; a resync failure must not undo that."""
+    db = tmp_path / "master.db"
+    db.write_bytes(b"x")
+    monkeypatch.setattr(tm_rb, "MASTER_DB_PATH", db)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(tm_rb, "repair_content_metadata", _boom)
+
+    out = _run_auto_resync(capsys)
+
+    assert "database is locked" in out
+    assert "tm rekordbox-resync" in out
+
+
+def test_auto_resync_reports_what_it_corrected(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "master.db"
+    db.write_bytes(b"x")
+    monkeypatch.setattr(tm_rb, "MASTER_DB_PATH", db)
+
+    aiff = _aiff(tmp_path / "track.aiff")
+    fix = tm_rb.ContentFix(
+        content_id=1,
+        path=aiff,
+        file_name=aiff.name,
+        current_type=tm_rb.FILETYPE_AIFF,
+        correct_type=tm_rb.FILETYPE_AIFF,
+        current_size=999,
+        correct_size=aiff.stat().st_size,
+    )
+    monkeypatch.setattr(
+        tm_rb,
+        "repair_content_metadata",
+        lambda **_k: tm_rb.ContentRepairResult(
+            fixes=[fix],
+            skipped_missing=[],
+            skipped_unverified=[],
+            backup_path=tmp_path / "master.db.bak",
+            committed=True,
+        ),
+    )
+
+    out = _run_auto_resync(capsys)
+
+    assert "Resynced 1 row(s)" in out
+    assert "1 size" in out
+    assert "master.db.bak" in out

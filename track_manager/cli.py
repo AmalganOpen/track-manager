@@ -460,12 +460,24 @@ def check_compat(output: Optional[str], scan_all: bool, gear: tuple[str, ...]):
     is_flag=True,
     help="Skip the confirmation prompt for a whole-library run",
 )
+@click.option(
+    "--no-resync",
+    is_flag=True,
+    help="Don't resync Rekordbox's cached file sizes afterwards (NOT recommended)",
+)
+@click.option(
+    "--kill-agent",
+    is_flag=True,
+    help="Auto-kill rekordboxAgent if it's running (the GUI app must still be quit manually)",
+)
 def scale_covers(
     track: Optional[str],
     output: Optional[str],
     max_side: Optional[int],
     dry_run: bool,
     yes: bool,
+    no_resync: bool,
+    kill_agent: bool,
 ):
     """Shrink embedded cover art to a Pioneer-safe JPEG.
 
@@ -478,6 +490,11 @@ def scale_covers(
     a truncated audio file. The metadata blob and other tags are left
     alone. Without TRACK, scans the whole library and asks before writing.
     TRACK is a partial filename.
+
+    Shrinking a cover changes the file's size, which Rekordbox has
+    already cached and will happily export to a USB as gospel, so this
+    runs `tm rekordbox-resync` afterwards. That needs Rekordbox quit,
+    which is checked up front rather than after the rewriting is done.
     """
     from . import cover as tm_cover
     from .library import find_matching_tracks, list_library_tracks, pick_track
@@ -509,6 +526,9 @@ def scale_covers(
     if not dry_run and not shutil.which("ffmpeg"):
         click.echo("❌ ffmpeg not found on PATH (needed to scale covers)", err=True)
         sys.exit(1)
+
+    if not dry_run:
+        _require_rekordbox_stopped(kill_agent)
 
     if not dry_run and track is None and not yes:
         if not click.confirm(
@@ -542,6 +562,19 @@ def scale_covers(
     click.echo(f"  🔄 Scaled:  {len(scaled)}")
     click.echo(f"  ⏭️  Skipped: {len(skipped)}")
     click.echo(f"  ❌ Failed:  {len(failed)}")
+
+    # Runs even on partial failure: whatever did get rewritten is already
+    # out of sync, and leaving it that way is the bug we're avoiding.
+    if scaled and not dry_run:
+        click.echo()
+        if no_resync:
+            click.echo(
+                "⚠️  Rekordbox still has the old file sizes cached (--no-resync).\n"
+                "    Run `tm rekordbox-resync` before exporting to USB."
+            )
+        else:
+            _resync_rekordbox_cache()
+
     if failed:
         sys.exit(1)
 
@@ -595,16 +628,37 @@ def _collect_compat_from_rekordbox(
 
 @cli.command("apply-metadata")
 @click.option("--show", is_flag=True, help="Show pending reviews without applying")
-def apply_metadata(show: bool):
-    """Apply metadata corrections from CSV."""
+@click.option(
+    "--no-resync",
+    is_flag=True,
+    help="Don't resync Rekordbox's cached file sizes afterwards (NOT recommended)",
+)
+@click.option(
+    "--kill-agent",
+    is_flag=True,
+    help="Auto-kill rekordboxAgent if it's running (the GUI app must still be quit manually)",
+)
+def apply_metadata(show: bool, no_resync: bool, kill_agent: bool):
+    """Apply metadata corrections from CSV.
+
+    Rewriting tags changes each file's size, which Rekordbox has cached
+    and will export to a USB as-is, so this resyncs afterwards. That
+    needs Rekordbox quit, which is checked before anything is written.
+    """
     from .metadata import apply_metadata_csv, show_pending_reviews
 
     config = Config()
 
     if show:
         show_pending_reviews()
-    else:
-        apply_metadata_csv()
+        return
+
+    _require_rekordbox_stopped(kill_agent)
+    result = apply_metadata_csv()
+
+    if result.get("processed") and not no_resync:
+        click.echo()
+        _resync_rekordbox_cache()
 
 
 def _collect_diff(
@@ -1094,8 +1148,17 @@ def upgrade(
     help="Migrate at most N files (useful for a small test run before going all-in)",
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt")
+@click.option(
+    "--kill-agent",
+    is_flag=True,
+    help="Auto-kill rekordboxAgent if it's running (the GUI app must still be quit manually)",
+)
 def migrate_to_aiff(
-    output: Optional[str], dry_run: bool, limit: Optional[int], yes: bool
+    output: Optional[str],
+    dry_run: bool,
+    limit: Optional[int],
+    yes: bool,
+    kill_agent: bool,
 ):
     """Re-encode every non-AIFF file in the library to AIFF in place.
 
@@ -1160,6 +1223,8 @@ def migrate_to_aiff(
         for p in candidates:
             click.echo(f"  {p.name}")
         return
+
+    _require_rekordbox_stopped(kill_agent)
 
     if not yes:
         if not click.confirm(
@@ -1298,7 +1363,7 @@ def rekordbox_list(library_dir: Optional[str], show_all: bool, show_outside: boo
             click.echo(f"  {t.folder_path}")
 
 
-def _require_rekordbox_stopped(kill_agent: bool) -> None:
+def _require_rekordbox_stopped(kill_agent: bool = False) -> None:
     """Exit unless Rekordbox and its background agent are both stopped.
 
     The GUI app is never auto-killed: it holds unsaved collection state.
@@ -1364,6 +1429,51 @@ def _require_rekordbox_stopped(kill_agent: bool) -> None:
             sys.exit(1)
         click.echo("   ✅ rekordboxAgent stopped.")
     click.echo()
+
+
+def _resync_rekordbox_cache() -> None:
+    """Re-point Rekordbox at the files as they now are on disk.
+
+    Rekordbox reads each file's size and container once, at import, then
+    trusts that cache forever and copies it into the USB's table of
+    contents. Any in-place rewrite therefore leaves it describing a file
+    that no longer exists, and the deck believes the database over the
+    bytes: E-8302 on a track that plays fine everywhere else.
+
+    Never fatal. The rewrite it follows has already succeeded, so a
+    failure here downgrades to a warning telling the caller to run
+    ``tm rekordbox-resync`` before exporting.
+    """
+    from . import rekordbox_db as tm_rb
+
+    if not tm_rb.MASTER_DB_PATH.exists():
+        return
+
+    click.echo("🔄 Resyncing Rekordbox's cached file size/type...")
+    try:
+        result = tm_rb.repair_content_metadata(dry_run=False, backup=True)
+    except ImportError as e:
+        click.echo(f"   ⚠️  Skipped: {e}")
+        return
+    except Exception as e:
+        click.echo(f"   ⚠️  Resync failed: {e}", err=True)
+        click.echo(
+            "      Run `tm rekordbox-resync` before exporting, or the deck may "
+            "throw E-8302 on the rewritten tracks.",
+            err=True,
+        )
+        return
+
+    if not result.fixes:
+        click.echo("   ✅ Already in sync — nothing to correct.")
+        return
+
+    click.echo(
+        f"   ✅ Resynced {len(result.fixes)} row(s): "
+        f"{len(result.size_fixes)} size, {len(result.type_fixes)} type."
+    )
+    if result.backup_path:
+        click.echo(f"      Backup: {result.backup_path}")
 
 
 @cli.command("rekordbox-resync")
