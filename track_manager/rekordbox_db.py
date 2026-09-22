@@ -30,15 +30,25 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple, Optional
 
-# Pioneer's FileType enum on DjmdContent. Confirmed against multiple
-# real-world exports / pyrekordbox source.
+# Pioneer's FileType enum on DjmdContent, mirroring
+# ``pyrekordbox.db6.tables.FileType``. Getting these wrong is not a
+# cosmetic problem: players trust the stored type over the file's actual
+# container, so an AIFF tagged 5 (FLAC) is handed to the FLAC decoder and
+# fails to load on decks that can't fall back (e.g. XDJ-1000MK2).
+# ``tests/unit/test_rekordbox_db.py`` asserts this stays in sync.
+FILETYPE_MP3 = 1
+FILETYPE_M4A = 4
+FILETYPE_FLAC = 5
+FILETYPE_WAV = 11
+FILETYPE_AIFF = 12
+
 FILETYPE_BY_EXT = {
-    ".mp3": 0,
-    ".m4a": 1,
-    ".wav": 4,
-    ".aiff": 5,
-    ".aif": 5,
-    ".flac": 11,
+    ".mp3": FILETYPE_MP3,
+    ".m4a": FILETYPE_M4A,
+    ".flac": FILETYPE_FLAC,
+    ".wav": FILETYPE_WAV,
+    ".aiff": FILETYPE_AIFF,
+    ".aif": FILETYPE_AIFF,
 }
 
 MASTER_DB_PATH = Path.home() / "Library/Pioneer/rekordbox/master.db"
@@ -132,8 +142,28 @@ def running_rekordbox_processes() -> list[RekordboxProcess]:
         # mentions rekordbox (e.g. running from a script named that).
         if pid == os.getpid():
             continue
+        # ``-f`` matches the whole command line, so anything that merely
+        # mentions rekordbox in an argument (a grep, an editor, another
+        # tm invocation) shows up too. Only the executable's own name
+        # can hold the database lock.
+        if not _executable_is_rekordbox(cmd):
+            continue
         procs.append(RekordboxProcess(pid=pid, command=cmd))
     return procs
+
+
+def _executable_is_rekordbox(cmd: str) -> bool:
+    """True if the command line's executable is a rekordbox binary.
+
+    Handles the space in paths like ``/Applications/rekordbox 7/…`` by
+    testing every leading path fragment, so a genuine process is never
+    missed just because its directory contains a space.
+    """
+    if not cmd:
+        return False
+    head = cmd.split(" -", 1)[0]
+    candidates = [head] + head.split(" ")
+    return any("rekordbox" in os.path.basename(c).lower() for c in candidates if c)
 
 
 def is_rekordbox_running() -> bool:
@@ -284,7 +314,9 @@ def plan_update_to_aiff(
                 new_size=new_size,
                 new_bitrate=info.get("bitrate_kbps"),
                 new_sample_rate=info.get("sample_rate"),
-                new_filetype=FILETYPE_BY_EXT.get(new_path.suffix.lower(), 5),
+                new_filetype=FILETYPE_BY_EXT.get(
+                    new_path.suffix.lower(), FILETYPE_AIFF
+                ),
             )
         )
 
@@ -349,6 +381,195 @@ def update_paths_to_aiff(
         skipped_outside=outside,
         skipped_already_aiff=already_aiff,
         skipped_no_aiff=no_aiff,
+        backup_path=backup_path,
+        committed=committed,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stale-metadata repair
+#
+# Rekordbox caches each track's type and byte size and exports both into
+# the USB's table of contents. Neither is re-read when a file changes
+# underneath it, so anything that rewrites a file in place (notably
+# ``tm scale-covers``) leaves the collection describing a file that no
+# longer exists. Players trust the cache:
+#   * wrong FileType -> decoded with the wrong codec (E-8305)
+#   * wrong FileSize -> reads run off the end of the data (E-8302)
+# ---------------------------------------------------------------------------
+
+
+def sniff_container(path: Path) -> Optional[str]:
+    """Identify a file's real container from its magic bytes.
+
+    Returns an extension-style key (``".aiff"``, ``".wav"``, …) or None if
+    the header is unreadable or doesn't match anything we know.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+    except OSError:
+        return None
+    if len(head) < 12:
+        return None
+
+    if head[:4] == b"FORM" and head[8:12] in (b"AIFF", b"AIFC"):
+        return ".aiff"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return ".wav"
+    if head[:4] == b"fLaC":
+        return ".flac"
+    if head[4:8] == b"ftyp":
+        return ".m4a"
+    if head[:3] == b"ID3" or (head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
+        # An ID3 tag alone isn't conclusive (AIFF/FLAC can carry one too),
+        # but those are caught by their own magic above.
+        return ".mp3"
+    return None
+
+
+class ContentFix(NamedTuple):
+    """One DjmdContent row that no longer describes its file on disk."""
+
+    content_id: int
+    path: Path
+    file_name: str
+    current_type: int
+    correct_type: int
+    current_size: int
+    correct_size: int
+
+    @property
+    def type_changed(self) -> bool:
+        return self.current_type != self.correct_type
+
+    @property
+    def size_changed(self) -> bool:
+        return self.current_size != self.correct_size
+
+
+class ContentRepairResult(NamedTuple):
+    fixes: list[ContentFix]
+    skipped_missing: list[TrackInfo]
+    skipped_unverified: list[TrackInfo]
+    backup_path: Optional[Path]
+    committed: bool
+
+    @property
+    def type_fixes(self) -> list[ContentFix]:
+        return [f for f in self.fixes if f.type_changed]
+
+    @property
+    def size_fixes(self) -> list[ContentFix]:
+        return [f for f in self.fixes if f.size_changed]
+
+
+def plan_content_repair(
+    library_dir: Optional[Path] = None,
+) -> tuple[list[ContentFix], list[TrackInfo], list[TrackInfo]]:
+    """Find rows whose cached type or byte size contradicts the file on disk.
+
+    A type change is only proposed when the file's magic bytes confirm its
+    container, so a mis-named file is never given an equally wrong label.
+    Size is read straight from the filesystem.
+
+    Returns ``(fixes, missing_on_disk, unverified)``.
+    """
+    fixes: list[ContentFix] = []
+    missing: list[TrackInfo] = []
+    unverified: list[TrackInfo] = []
+
+    for track in list_tracks(library_dir):
+        suffix = track.folder_path.suffix.lower()
+        expected_type = FILETYPE_BY_EXT.get(suffix)
+        if expected_type is None:
+            continue
+
+        if not track.folder_path.is_file():
+            if track.file_type != expected_type:
+                missing.append(track)
+            continue
+
+        try:
+            actual_size = track.folder_path.stat().st_size
+        except OSError:
+            missing.append(track)
+            continue
+
+        correct_type = track.file_type
+        if track.file_type != expected_type:
+            if sniff_container(track.folder_path) == suffix:
+                correct_type = expected_type
+            else:
+                unverified.append(track)
+
+        if correct_type == track.file_type and actual_size == track.file_size:
+            continue
+
+        fixes.append(
+            ContentFix(
+                content_id=track.content_id,
+                path=track.folder_path,
+                file_name=track.file_name,
+                current_type=track.file_type,
+                correct_type=correct_type,
+                current_size=track.file_size,
+                correct_size=actual_size,
+            )
+        )
+
+    return fixes, missing, unverified
+
+
+def repair_content_metadata(
+    library_dir: Optional[Path] = None,
+    *,
+    dry_run: bool = False,
+    backup: bool = True,
+) -> ContentRepairResult:
+    """Resync DjmdContent.FileType / FileSize with the files on disk.
+
+    Repairs collections damaged by the historic off-by-one in
+    ``FILETYPE_BY_EXT`` (every migrated AIFF labelled FLAC) and by
+    in-place rewrites such as ``tm scale-covers`` that change a file's
+    length without Rekordbox noticing.
+
+    Refuses to run if Rekordbox / rekordboxAgent is in the process list,
+    and backs up master.db before writing unless ``backup=False``.
+    """
+    procs = running_rekordbox_processes()
+    if procs:
+        details = "; ".join(f"{p.command} (pid {p.pid})" for p in procs)
+        raise RuntimeError(
+            f"Rekordbox is running ({details}). Quit the app and the "
+            f"rekordboxAgent helper before running this command."
+        )
+
+    fixes, missing, unverified = plan_content_repair(library_dir)
+
+    backup_path: Optional[Path] = None
+    committed = False
+
+    if not dry_run and fixes:
+        if backup:
+            backup_path = _backup_master_db()
+
+        db = _open_db()
+        content_by_id = {int(c.ID): c for c in db.get_content()}
+        for fix in fixes:
+            content = content_by_id.get(fix.content_id)
+            if content is None:
+                # Row vanished between plan and apply; ignore.
+                continue
+            content.FileType = fix.correct_type
+            content.FileSize = fix.correct_size
+        db.commit()
+        committed = True
+
+    return ContentRepairResult(
+        fixes=fixes,
+        skipped_missing=missing,
+        skipped_unverified=unverified,
         backup_path=backup_path,
         committed=committed,
     )

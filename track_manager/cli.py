@@ -1298,6 +1298,201 @@ def rekordbox_list(library_dir: Optional[str], show_all: bool, show_outside: boo
             click.echo(f"  {t.folder_path}")
 
 
+def _require_rekordbox_stopped(kill_agent: bool) -> None:
+    """Exit unless Rekordbox and its background agent are both stopped.
+
+    The GUI app is never auto-killed: it holds unsaved collection state.
+    ``rekordboxAgent`` has none, so ``--kill-agent`` may terminate it.
+    """
+    from . import rekordbox_db as tm_rb
+
+    click.echo("🔍 Checking for running Rekordbox processes...")
+    procs = tm_rb.running_rekordbox_processes()
+    if not procs:
+        click.echo("   ✅ No Rekordbox processes running.")
+        click.echo()
+        return
+
+    for p in procs:
+        if p.is_agent:
+            tag = " (agent)"
+        elif "rekordbox 7" in p.command.lower() or "rekordbox.app" in p.command.lower():
+            tag = " (main app)"
+        else:
+            tag = ""
+        click.echo(f"   • pid {p.pid}: {p.command}{tag}")
+
+    agents = [p for p in procs if p.is_agent]
+    non_agents = [p for p in procs if not p.is_agent]
+
+    if non_agents:
+        click.echo(
+            "❌ The Rekordbox GUI app is running. Quit it (⌘Q) before continuing — "
+            "the GUI app holds unsaved collection state and we won't auto-kill it.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if agents:
+        if not kill_agent:
+            click.echo(
+                "❌ rekordboxAgent is running. It will hold the database lock until "
+                "it exits.\n"
+                "   Re-run with --kill-agent to terminate it automatically, or "
+                "quit it manually:\n"
+                f"     kill {' '.join(str(p.pid) for p in agents)}",
+                err=True,
+            )
+            sys.exit(1)
+
+        click.echo("🛑 Terminating rekordboxAgent…")
+        ok, remaining = tm_rb.kill_rekordbox_agent(timeout=10.0)
+        if not ok:
+            click.echo(
+                "❌ rekordboxAgent did not exit within 10s. Try killing it manually:\n"
+                f"   kill -9 {' '.join(str(p.pid) for p in remaining if p.is_agent)}",
+                err=True,
+            )
+            sys.exit(1)
+        if remaining:
+            click.echo(
+                "❌ A Rekordbox process is still running after killing the agent:",
+                err=True,
+            )
+            for p in remaining:
+                click.echo(f"   • pid {p.pid}: {p.command}", err=True)
+            sys.exit(1)
+        click.echo("   ✅ rekordboxAgent stopped.")
+    click.echo()
+
+
+@cli.command("rekordbox-resync")
+@click.option(
+    "--dry-run", "-n", is_flag=True, help="Show what would change without writing"
+)
+@click.option(
+    "--no-backup", is_flag=True, help="Skip the master.db backup (NOT recommended)"
+)
+@click.option(
+    "--kill-agent",
+    is_flag=True,
+    help="Auto-kill rekordboxAgent if it's running (the GUI app must still be quit manually)",
+)
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt")
+def rekordbox_resync(dry_run: bool, no_backup: bool, kill_agent: bool, yes: bool):
+    """Resync Rekordbox's cached file type and size with the files on disk.
+
+    Rekordbox caches both and copies them into the USB's table of
+    contents, but never re-reads them when a file changes underneath.
+    Players trust the cache, which produces two failures that look like
+    corrupt audio but aren't:
+
+    \b
+      E-8305 UNSUPPORTED FILE FORMAT — wrong type, so the deck picks the
+             wrong decoder. Older `tm rekordbox-update-paths` recorded
+             every migrated AIFF as FLAC.
+      E-8302 CANNOT PLAY TRACK — wrong size, so reads run off the end.
+             Left behind by in-place rewrites like `tm scale-covers`.
+
+    A type is only changed when the file's magic bytes confirm its
+    container. Rekordbox must be quit first.
+    """
+    from . import rekordbox_db as tm_rb
+
+    _require_rekordbox_stopped(kill_agent)
+
+    try:
+        result = tm_rb.repair_content_metadata(dry_run=True, backup=False)
+    except ImportError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Failed to plan resync: {e}", err=True)
+        sys.exit(1)
+
+    def type_name(value: int) -> str:
+        for ext, code in tm_rb.FILETYPE_BY_EXT.items():
+            if code == value:
+                return ext.lstrip(".").upper()
+        return f"type {value}"
+
+    click.echo(f"Out-of-date rows:        {len(result.fixes)}")
+    click.echo(f"  wrong file type:       {len(result.type_fixes)}")
+    click.echo(f"  wrong file size:       {len(result.size_fixes)}")
+    click.echo(f"Skipped (file missing):  {len(result.skipped_missing)}")
+    click.echo(f"Skipped (unverified):    {len(result.skipped_unverified)}")
+    click.echo()
+
+    if not result.fixes:
+        click.echo("✅ Rekordbox already matches every file on disk. Nothing to do.")
+        return
+
+    if result.type_fixes:
+        counts: dict[str, int] = {}
+        for fix in result.type_fixes:
+            key = f"{type_name(fix.current_type)} → {type_name(fix.correct_type)}"
+            counts[key] = counts.get(key, 0) + 1
+        click.echo("File type corrections:")
+        for key, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+            click.echo(f"  {count:>5} × {key}")
+        click.echo()
+
+    if result.size_fixes:
+        click.echo("Largest file size corrections:")
+        worst = sorted(
+            result.size_fixes, key=lambda f: abs(f.correct_size - f.current_size)
+        )[::-1]
+        for fix in worst[:10]:
+            delta = fix.correct_size - fix.current_size
+            click.echo(f"  {delta:+12,} bytes  {fix.file_name[:52]}")
+        if len(result.size_fixes) > 10:
+            click.echo(f"  … and {len(result.size_fixes) - 10} more")
+        click.echo()
+
+    if result.skipped_unverified:
+        click.echo("Skipped — file contents don't match the extension:")
+        for t in result.skipped_unverified[:10]:
+            click.echo(f"  {t.folder_path.name}")
+        if len(result.skipped_unverified) > 10:
+            click.echo(f"  … and {len(result.skipped_unverified) - 10} more")
+        click.echo()
+
+    if dry_run:
+        click.echo("Dry run — no changes written. Re-run without --dry-run to apply.")
+        return
+
+    if not yes:
+        msg = f"Resync {len(result.fixes)} rows in master.db? "
+        msg += (
+            "A timestamped backup of master.db will be created."
+            if not no_backup
+            else "⚠️  NO BACKUP will be made (--no-backup)."
+        )
+        if not click.confirm(msg, default=False):
+            click.echo("Aborted.")
+            return
+
+    try:
+        result = tm_rb.repair_content_metadata(dry_run=False, backup=not no_backup)
+    except Exception as e:
+        click.echo(f"❌ Resync failed: {e}", err=True)
+        sys.exit(1)
+
+    click.echo()
+    click.echo(f"✅ Resynced {len(result.fixes)} rows in master.db.")
+    if result.backup_path:
+        click.echo(f"   Backup: {result.backup_path}")
+    click.echo()
+    click.echo("Next steps:")
+    click.echo("  1. Open Rekordbox.")
+    click.echo("  2. Delete the affected tracks from the USB, then export again —")
+    click.echo("     re-exporting alone skips files already on the stick.")
+    if result.backup_path:
+        click.echo("  3. If anything looks wrong, restore the backup:")
+        click.echo(f'       cp "{result.backup_path}" "{tm_rb.MASTER_DB_PATH}"')
+        click.echo("     (Rekordbox must be closed when restoring.)")
+
+
 @cli.command("rekordbox-update-paths")
 @click.option(
     "--library-dir",
@@ -1345,70 +1540,7 @@ def rekordbox_update_paths(
         Path(library_dir).resolve() if library_dir else config.output_dir.resolve()
     )
 
-    # ------------------------------------------------------------------
-    # Pre-flight: confirm Rekordbox + agent are both not running.
-    # ------------------------------------------------------------------
-    click.echo("🔍 Checking for running Rekordbox processes...")
-    procs = tm_rb.running_rekordbox_processes()
-    if procs:
-        for p in procs:
-            tag = (
-                " (agent)"
-                if p.is_agent
-                else (
-                    " (main app)"
-                    if "rekordbox 7" in p.command.lower()
-                    or "rekordbox.app" in p.command.lower()
-                    else ""
-                )
-            )
-            click.echo(f"   • pid {p.pid}: {p.command}{tag}")
-
-        agents = [p for p in procs if p.is_agent]
-        non_agents = [p for p in procs if not p.is_agent]
-
-        if non_agents:
-            click.echo(
-                "❌ The Rekordbox GUI app is running. Quit it (⌘Q) before continuing — "
-                "the GUI app holds unsaved collection state and we won't auto-kill it.",
-                err=True,
-            )
-            sys.exit(1)
-
-        if agents:
-            if not kill_agent:
-                click.echo(
-                    "❌ rekordboxAgent is running. It will hold the database lock until "
-                    "it exits.\n"
-                    "   Re-run with --kill-agent to terminate it automatically, or "
-                    "quit it manually:\n"
-                    f"     kill {' '.join(str(p.pid) for p in agents)}",
-                    err=True,
-                )
-                sys.exit(1)
-
-            click.echo("🛑 Terminating rekordboxAgent…")
-            ok, remaining = tm_rb.kill_rekordbox_agent(timeout=10.0)
-            if not ok:
-                click.echo(
-                    "❌ rekordboxAgent did not exit within 10s. Try killing it manually:\n"
-                    f"   kill -9 {' '.join(str(p.pid) for p in remaining if p.is_agent)}",
-                    err=True,
-                )
-                sys.exit(1)
-            if remaining:
-                # Non-agent rekordbox process still up — refuse.
-                click.echo(
-                    "❌ A Rekordbox process is still running after killing the agent:",
-                    err=True,
-                )
-                for p in remaining:
-                    click.echo(f"   • pid {p.pid}: {p.command}", err=True)
-                sys.exit(1)
-            click.echo("   ✅ rekordboxAgent stopped.")
-    else:
-        click.echo("   ✅ No Rekordbox processes running.")
-    click.echo()
+    _require_rekordbox_stopped(kill_agent)
 
     try:
         result = tm_rb.update_paths_to_aiff(library, dry_run=True, backup=False)
