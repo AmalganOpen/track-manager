@@ -297,7 +297,7 @@ def _ensure_librosa():
     except ImportError as e:
         raise TuningAnalysisError(
             "librosa is required for check-tuning. "
-            "Reinstall track-manager (or: pip install librosa)"
+            "Install with: pip install 'track-manager[tune]'"
         ) from e
     import librosa
 

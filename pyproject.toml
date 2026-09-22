@@ -34,11 +34,14 @@ dependencies = [
     "click>=8.1.0",
     # Rekordbox database access (SQLCipher-encrypted master.db).
     "pyrekordbox>=0.4.0",
-    # Tuning analysis (check-tuning).
-    "librosa>=0.10.0",
 ]
 
 [project.optional-dependencies]
+# check-tuning only. librosa pulls scikit-learn, which has no wheels on
+# some Python/OS combos and used to block a plain `tm update`.
+tune = [
+    "librosa>=0.10.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
@@ -47,6 +50,7 @@ dev = [
     "isort>=5.12.0",
     "pre-commit>=3.5.0",
     "bandit>=1.7.0",
+    "librosa>=0.10.0",
 ]
 
 [project.scripts]

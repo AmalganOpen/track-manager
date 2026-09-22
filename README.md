@@ -44,6 +44,8 @@ cd track-manager
 
 # Install the package
 pip install -e .
+# Optional: tuning analysis (tm check-tuning)
+pip install -e ".[tune]"
 # or
 pip3 install -e .
 ```

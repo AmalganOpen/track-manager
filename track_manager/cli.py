@@ -1690,9 +1690,9 @@ def check_tuning(
 ):
     """Estimate whether a track is sharp/flat vs A440.
 
-    Reports global tuning offset in cents. Without -a, TRACK is a partial
-    title/filename matched against the configured output library (same picker
-    as ``tune``).
+    Requires ``pip install 'track-manager[tune]'`` (librosa). Reports global
+    tuning offset in cents. Without -a, TRACK is a partial title/filename
+    matched against the configured output library (same picker as ``tune``).
 
     \b
     Examples:
@@ -1703,7 +1703,14 @@ def check_tuning(
       tm check-tuning "racks" --key-source estimated
       tm check-tuning "drop" --offset 90 --duration 20 --key-scope window
     """
-    from . import check_tuning as tm_check
+    try:
+        from . import check_tuning as tm_check
+    except ImportError:
+        click.echo(
+            "❌ check-tuning needs librosa. Install with: pip install 'track-manager[tune]'",
+            err=True,
+        )
+        sys.exit(1)
     from . import library as tm_library
 
     config = Config()
