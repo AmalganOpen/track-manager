@@ -13,6 +13,7 @@ import yt_dlp
 
 from .. import audio as tm_audio
 from ..config import Config
+from ..title_parse import soundcloud_guesses
 from .youtube import YouTubeDownloader
 
 
@@ -91,23 +92,36 @@ class SoundCloudDownloader(YouTubeDownloader):
         if label:
             print(label)
 
-        if self.parent_downloader:
-            print("🔗 Trying smart download...")
-            if self.parent_downloader.try_smart_download(
-                url, target_format, playlist_url=playlist_url, check_duplicates=True
-            ):
-                return True
-
-            print("⬇️ Downloading from SoundCloud")
-            print()
-
         with yt_dlp.YoutubeDL(_sc_ydl_opts(self.output_dir)) as ydl:
+            # Cheap metadata-only fetch first: it feeds the smart-download
+            # search (song.link alone rarely resolves SoundCloud uploads) and
+            # pre-empts downloading audio for tracks already in the library.
+            # Flat playlist extraction often gives title='Unknown', so this
+            # re-extracts per-track to get real tags.
             try:
-                # Cheap metadata-only fetch first so we can pre-empt
-                # downloading audio for tracks already in the library.
-                # Flat playlist extraction often gives title='Unknown',
-                # so we re-extract per-track here to get real tags.
-                if self._check_predownload_duplicate(ydl, url):
+                meta: Optional[dict] = ydl.extract_info(url, download=False)
+            except Exception:
+                meta = None
+
+            if self.parent_downloader:
+                print("🔗 Trying smart download...")
+                if self.parent_downloader.try_smart_download(
+                    url,
+                    target_format,
+                    playlist_url=playlist_url,
+                    check_duplicates=True,
+                    guesses=soundcloud_guesses(meta) if meta else None,
+                ):
+                    return True
+
+                print("⬇️ Downloading from SoundCloud")
+                print()
+
+            try:
+                if meta and self.check_duplicate_for(
+                    meta.get("artist") or meta.get("uploader"),
+                    meta.get("track") or meta.get("title"),
+                ):
                     return True
 
                 info = ydl.extract_info(url, download=True)

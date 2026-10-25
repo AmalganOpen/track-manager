@@ -1,10 +1,11 @@
 """Main downloader orchestrator."""
 
 import os
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from . import __version__
@@ -46,6 +47,19 @@ def _strip_tracking_params(url: str) -> str:
     parsed = urlparse(url)
     qs = {k: v for k, v in parse_qs(parsed.query).items() if k not in _TRACKING_PARAMS}
     return urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
+
+
+def _metadata_from_tidal(track: dict) -> dict:
+    """Spotify-shaped metadata (artists/title/album/duration) from a TIDAL track."""
+    names = [a["name"] for a in track.get("artists") or [] if a.get("name")]
+    if not names and (track.get("artist") or {}).get("name"):
+        names = [track["artist"]["name"]]
+    return {
+        "artists": names,
+        "title": track.get("title"),
+        "album": (track.get("album") or {}).get("title"),
+        "duration_seconds": track.get("duration"),
+    }
 
 
 class Downloader:
@@ -142,6 +156,25 @@ class Downloader:
                 return match.group(1)
         return None
 
+    def _spotipy_client(self):
+        """Return a client-credentials spotipy client, or None without creds."""
+        import spotipy
+        from spotipy.oauth2 import SpotifyClientCredentials
+
+        client_id = os.environ.get("SPOTIPY_CLIENT_ID") or self.config.get(
+            "spotdl.client_id"
+        )
+        client_secret = os.environ.get("SPOTIPY_CLIENT_SECRET") or self.config.get(
+            "spotdl.client_secret"
+        )
+        if not client_id or not client_secret:
+            return None
+
+        auth_manager = SpotifyClientCredentials(
+            client_id=client_id, client_secret=client_secret
+        )
+        return spotipy.Spotify(auth_manager=auth_manager)
+
     def _get_isrc_from_spotify(
         self, spotify_id: str, return_metadata: bool = False
     ) -> tuple[Optional[str], Optional[dict]]:
@@ -155,25 +188,9 @@ class Downloader:
             Tuple of (isrc, metadata_dict) if return_metadata=True, else (isrc, None)
         """
         try:
-            import spotipy
-            from spotipy.oauth2 import SpotifyClientCredentials
-
-            # Get credentials from environment or config
-            client_id = os.environ.get("SPOTIPY_CLIENT_ID") or self.config.get(
-                "spotdl.client_id"
-            )
-            client_secret = os.environ.get("SPOTIPY_CLIENT_SECRET") or self.config.get(
-                "spotdl.client_secret"
-            )
-
-            if not client_id or not client_secret:
+            sp = self._spotipy_client()
+            if sp is None:
                 return None, None
-
-            # Initialize Spotify client
-            auth_manager = SpotifyClientCredentials(
-                client_id=client_id, client_secret=client_secret
-            )
-            sp = spotipy.Spotify(auth_manager=auth_manager)
 
             # Get track data with rate limiting
             spotify_rate_limit()
@@ -186,6 +203,7 @@ class Downloader:
                     "artists": [a["name"] for a in track.get("artists", [])],
                     "title": track.get("name"),
                     "album": track.get("album", {}).get("name"),
+                    "duration_ms": track.get("duration_ms"),
                 }
                 return isrc, metadata
 
@@ -502,15 +520,12 @@ class Downloader:
             return False
 
         duration_s = extract_duration_seconds(spotify_metadata)
+        # Per-track temp dir under output_dir; removed whatever the outcome.
+        temp_dir = self.output_dir / f".tmp_soulseek_{sanitize_filename(title)[:40]}"
 
         try:
             print(f"🎵 Searching Soulseek: {artist} – {title}...")
             client = SoulseekClient(self.config)
-            # Download into a per-track temp dir under output_dir so we can
-            # clean up leftovers easily after finalize.
-            temp_dir = (
-                self.output_dir / f".tmp_soulseek_{sanitize_filename(title)[:40]}"
-            )
             temp_dir.mkdir(parents=True, exist_ok=True)
             downloaded = client.download_track(
                 artist,
@@ -557,15 +572,6 @@ class Downloader:
                 print("❌ Soulseek post-processing failed", file=sys.stderr)
                 return False
 
-            # Best-effort cleanup of the temp download dir.
-            try:
-                for leftover in temp_dir.rglob("*"):
-                    if leftover.is_file():
-                        leftover.unlink(missing_ok=True)
-                temp_dir.rmdir()
-            except OSError:
-                pass
-
             print(
                 f"✅ Downloaded Soulseek ({original_format or 'unknown'}"
                 f"{f' {original_bitrate}k' if original_bitrate else ''})"
@@ -577,6 +583,8 @@ class Downloader:
         except Exception as e:
             print(f"⚠️ Soulseek error: {e}", file=sys.stderr)
             return False
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------
     # Metadata document builders
@@ -943,6 +951,7 @@ class Downloader:
         spotify_metadata: Optional[dict] = None,
         playlist_url: Optional[str] = None,
         check_duplicates: bool = False,
+        guesses: Optional[List[dict]] = None,
     ) -> bool:
         """Try to download via the smart-download chain (HQ sources temporarily disabled).
 
@@ -959,6 +968,10 @@ class Downloader:
                 by ``_SMART_UPGRADE_MAX_ATTEMPTS``). Callers that run their own
                 pre-download dedup (e.g. SpotifyDownloader) leave this False to
                 avoid double-checking.
+            guesses: Ranked ``{artists, title, duration_seconds}`` guesses
+                parsed from the source page (e.g. SoundCloud). Used for a
+                verified Spotify/Deezer search when song.link can't resolve the
+                URL, and as the Soulseek query when no catalogue match exists.
 
         Returns:
             True if downloaded successfully, False if caller should fall back.
@@ -984,7 +997,9 @@ class Downloader:
         # or _try_tidal_public, it also feeds those sources an ISRC —
         # capture the track dict again as `prefetched_track` for TIDAL.)
         if not isrc:
-            isrc, _ = self._resolve_isrc_via_tidal(url)
+            isrc, tidal_track = self._resolve_isrc_via_tidal(url)
+            if spotify_metadata is None and tidal_track:
+                spotify_metadata = _metadata_from_tidal(tidal_track)
 
         # Second chance: song.link → Spotify ISRC when Spotify API creds
         # are configured. Helps when TIDAL /info/ is down — without an ISRC
@@ -995,6 +1010,15 @@ class Downloader:
                 isrc = looked_up
                 if spotify_metadata is None and meta:
                     spotify_metadata = meta
+
+        if guesses and (not isrc or spotify_metadata is None):
+            match = self._search_catalogs(guesses)
+            if match:
+                isrc = isrc or match.get("isrc")
+                if spotify_metadata is None:
+                    spotify_metadata = match
+        if spotify_metadata is None and guesses:
+            spotify_metadata = guesses[0]
 
         # Quality-aware dedup: now that the ISRC is resolved (the strongest
         # cross-source identity), see if we already own this track and can
@@ -1152,6 +1176,29 @@ class Downloader:
         else:
             print(f"⏭️ Kept existing copy ({msg})")
         return True
+
+    def _search_catalogs(self, guesses: List[dict]) -> Optional[dict]:
+        """Verified Spotify/Deezer search for a parsed artist/title guess."""
+        from .catalog_search import find_match
+
+        sp = None
+        if self._has_spotify_credentials():
+            try:
+                sp = self._spotipy_client()
+            except Exception as e:
+                print(f"⚠️ Spotify client error: {e}", file=sys.stderr)
+
+        print("🔎 Searching catalogues for a verified match...")
+        match = find_match(guesses, spotify=sp)
+        if match:
+            isrc_suffix = f" (ISRC: {match['isrc']})" if match.get("isrc") else ""
+            print(
+                f"✅ Matched on {match['source'].capitalize()}: "
+                f"{', '.join(match['artists'])} – {match['title']}{isrc_suffix}"
+            )
+        else:
+            print("ℹ️ No verified catalogue match; using parsed title")
+        return match
 
     def _resolve_isrc_via_tidal(self, url: str) -> tuple[Optional[str], Optional[dict]]:
         """Discover a track's ISRC by looking it up on TIDAL via song.link.

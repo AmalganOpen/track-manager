@@ -230,6 +230,82 @@ def test_try_soulseek_rejects_duration_mismatch(tmp_path, monkeypatch, capsys):
     assert not preview.exists()  # cleaned up after rejection
 
 
+def test_try_soulseek_removes_temp_dir_on_miss(tmp_path, monkeypatch):
+    cfg = _write_config(
+        tmp_path,
+        "soulseek:\n  username: 'u'\n  password: 'p'\n"
+        "downloads:\n  default_format: auto\n",
+    )
+    monkeypatch.setattr(
+        "track_manager.soulseek.find_sockseek_binary", lambda _c=None: tmp_path
+    )
+    monkeypatch.setattr(
+        "track_manager.soulseek.SoulseekClient.download_track",
+        lambda *a, **k: None,
+    )
+    out = tmp_path / "out"
+    dl = Downloader(cfg, output_dir=out, dumb=False)
+    assert not dl._try_soulseek(SC_URL, "aiff", spotify_metadata=SC_GUESS)
+    assert list(out.iterdir()) == []
+
+
+def _smart_downloader(tmp_path, monkeypatch, *, tidal_track=None, catalog=None):
+    """Downloader with network lookups stubbed; records what Soulseek receives."""
+    cfg = _write_config(tmp_path, "downloads:\n  default_format: auto\n")
+    dl = Downloader(cfg, output_dir=tmp_path / "out", dumb=False)
+    received: dict = {}
+
+    def fake_soulseek(url, fmt, spotify_metadata=None, playlist_url=None, isrc=None):
+        received.update(metadata=spotify_metadata, isrc=isrc)
+        return True
+
+    monkeypatch.setattr(
+        dl,
+        "_resolve_isrc_via_tidal",
+        lambda _u: ((tidal_track or {}).get("isrc"), tidal_track),
+    )
+    monkeypatch.setattr(dl, "_has_spotify_credentials", lambda: False)
+    monkeypatch.setattr(dl, "_search_catalogs", lambda _g: catalog)
+    monkeypatch.setattr(dl, "_try_soulseek", fake_soulseek)
+    return dl, received
+
+
+SC_URL = "https://soundcloud.com/lijanism/5ebstoner"
+SC_GUESS = {"artists": ["lijan", "5EB"], "title": "STONER", "duration_seconds": 139.0}
+
+
+def test_smart_download_uses_parsed_guess_without_catalogue_match(
+    tmp_path, monkeypatch
+):
+    dl, received = _smart_downloader(tmp_path, monkeypatch)
+    assert dl.try_smart_download(SC_URL, "aiff", guesses=[SC_GUESS])
+    assert sl.extract_artist_title(received["metadata"]) == ("lijan, 5EB", "STONER")
+    assert sl.extract_duration_seconds(received["metadata"]) == 139.0
+    assert received["isrc"] is None
+
+
+def test_smart_download_prefers_verified_catalogue_match(tmp_path, monkeypatch):
+    match = {**SC_GUESS, "title": "Stoner", "isrc": "QZ123", "source": "deezer"}
+    dl, received = _smart_downloader(tmp_path, monkeypatch, catalog=match)
+    assert dl.try_smart_download(SC_URL, "aiff", guesses=[SC_GUESS])
+    assert received["metadata"]["title"] == "Stoner"
+    assert received["isrc"] == "QZ123"
+
+
+def test_smart_download_keeps_tidal_match_metadata(tmp_path, monkeypatch):
+    tidal = {
+        "isrc": "US123",
+        "title": "Song",
+        "artists": [{"name": "A"}, {"name": "B"}],
+        "duration": 201,
+    }
+    dl, received = _smart_downloader(tmp_path, monkeypatch, tidal_track=tidal)
+    assert dl.try_smart_download(SC_URL, "aiff")
+    assert sl.extract_artist_title(received["metadata"]) == ("A, B", "Song")
+    assert sl.extract_duration_seconds(received["metadata"]) == 201.0
+    assert received["isrc"] == "US123"
+
+
 def test_is_preview_audio_shared_guard_still_via_audio_guards(monkeypatch):
     monkeypatch.setattr(
         "track_manager.audio.probe_audio",
