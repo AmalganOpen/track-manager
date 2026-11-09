@@ -342,7 +342,9 @@ def encode_or_passthrough(target_format: str, src: Path, dst: Path) -> Path:
 
     Passthrough cases (lossless, byte-identical when stream copy isn't
     needed):
-      - `m4a`: source is AAC or ALAC inside an MP4 container → rename.
+      - `m4a`: source is AAC or ALAC inside an MP4 container → rename,
+        except `.mp4`, which is re-encoded so a video file is not renamed
+        into an audio file.
       - `mp3`: source codec is mp3 and source extension is `.mp3` → rename.
       - `aiff`: source codec is PCM and source extension is `.aiff`/`.aif`
         → rename. WAV (RIFF) shares PCM codec but a different container,
@@ -357,7 +359,12 @@ def encode_or_passthrough(target_format: str, src: Path, dst: Path) -> Path:
     src_suffix = src.suffix.lower()
 
     can_passthrough = (
-        (target_format == "m4a" and codec in ("aac", "alac") and is_mp4_container(src))
+        (
+            target_format == "m4a"
+            and codec in ("aac", "alac")
+            and is_mp4_container(src)
+            and src_suffix != ".mp4"
+        )
         or (target_format == "mp3" and codec == "mp3" and src_suffix == ".mp3")
         or (
             target_format == "aiff"

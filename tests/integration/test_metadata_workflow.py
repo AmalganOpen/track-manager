@@ -37,7 +37,7 @@ class TestMetadataWorkflow:
         assert csv_path.exists()
 
         # Verify content
-        with open(csv_path, "r") as f:
+        with open(csv_path, "r", newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
             assert len(rows) == 1
@@ -67,7 +67,7 @@ class TestMetadataWorkflow:
             flag_for_review(file2, "Reason 2", "url2")
 
         # Verify both entries exist
-        with open(csv_path, "r") as f:
+        with open(csv_path, "r", newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
             assert len(rows) == 2
@@ -210,7 +210,7 @@ class TestMetadataWorkflow:
         assert audio2.get("TPE1", [None])[0] == "Artist2"  # Unchanged
 
         # Verify only pending row remains in CSV
-        with open(csv_path, "r") as f:
+        with open(csv_path, "r", newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
             assert len(rows) == 1
@@ -267,7 +267,7 @@ class TestMetadataWorkflow:
 
         # Verify CSV was NOT modified
         assert csv_path.exists()
-        with open(csv_path, "r") as f:
+        with open(csv_path, "r", newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
             assert len(rows) == 1

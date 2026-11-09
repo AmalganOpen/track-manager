@@ -43,10 +43,13 @@ class TestSpotifyDuplicateDetection:
         """Test duplicate check when no duplicates exist."""
         downloader = SpotifyDownloader(self.config, self.output_dir)
 
-        # Mock song object
+        # Mock song object. URL and ISRC are checked before artist/title;
+        # leave them unset so this exercises the metadata fallback.
         song = MagicMock()
         song.artist = "Test Artist"
         song.name = "Test Title"
+        song.url = None
+        song.isrc = None
 
         with patch("track_manager.duplicates.find_duplicates") as mock_find:
             mock_find.return_value = []
@@ -59,10 +62,13 @@ class TestSpotifyDuplicateDetection:
         """Test duplicate check when duplicates exist."""
         downloader = SpotifyDownloader(self.config, self.output_dir)
 
-        # Mock song object
+        # Mock song object. URL and ISRC are checked before artist/title;
+        # leave them unset so this exercises the metadata fallback.
         song = MagicMock()
         song.artist = "Test Artist"
         song.name = "Test Title"
+        song.url = None
+        song.isrc = None
 
         # Create a mock duplicate file
         duplicate_file = self.output_dir / "existing.mp3"
@@ -83,6 +89,8 @@ class TestSpotifyDuplicateDetection:
         song = MagicMock()
         song.artist = None
         song.name = "Test Title"
+        song.url = None
+        song.isrc = None
 
         duplicates = downloader._check_existing_duplicates(song, "m4a")
         assert duplicates == []

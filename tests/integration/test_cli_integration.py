@@ -175,7 +175,9 @@ class TestCLIIntegration:
                 mock_which.return_value = "/usr/bin/ffmpeg"
 
                 with patch("importlib.import_module") as mock_import:
-                    result = runner.invoke(cli, ["check-setup"])
+                    # Decline a config-sync prompt so a drifted config.yaml
+                    # does not abort the dependency check.
+                    result = runner.invoke(cli, ["check-setup"], input="n\n")
 
                     assert result.exit_code == 0
                     assert "Checking track-manager dependencies" in result.output
