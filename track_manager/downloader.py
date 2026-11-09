@@ -586,6 +586,174 @@ class Downloader:
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def seek(
+        self,
+        query: str,
+        format: str,
+        *,
+        duration_s: Optional[float] = None,
+        limit: int = 20,
+        pick: Optional[int] = None,
+        auto: bool = False,
+    ) -> bool:
+        """Search Soulseek, download the chosen file, and finalize it.
+
+        ``query`` is ``Artist - Title``, a sockseek keyed string, or free
+        text. ``pick`` is a 1-based index into the shown results. ``auto``
+        takes the top-ranked hit. Returns True when a file was written.
+        """
+        from .soulseek import (
+            SEEK_PREF_LENGTH_TOL_SECONDS,
+            SoulseekClient,
+            artist_title_from_share_name,
+            choose_hit,
+            is_handshake_failure,
+            parse_seek_query,
+            rank_hits,
+        )
+
+        parsed = parse_seek_query(query, duration_s)
+        label = (
+            f"{parsed.artist} – {parsed.title}"
+            if parsed.artist and parsed.title
+            else parsed.text
+        )
+        print(f"🔍 Searching Soulseek: {label}...")
+
+        client = SoulseekClient(self.config)
+        found = client.search(parsed)
+        if found is None:
+            return False
+
+        hits = rank_hits(
+            found,
+            parsed.duration_s,
+            SEEK_PREF_LENGTH_TOL_SECONDS,
+        )
+        if not hits:
+            print("ℹ️ No Soulseek results")
+            return False
+
+        shown = hits[: max(1, limit)]
+        if len(hits) > len(shown):
+            print(f"ℹ️ Showing {len(shown)} of {len(hits)} results")
+
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = self.output_dir / f".tmp_soulseek_seek_{os.getpid()}"
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        try:
+            remaining = list(shown)
+            first_choice = True
+            while remaining:
+                chosen = choose_hit(
+                    remaining,
+                    pick=pick if first_choice else None,
+                    auto=auto if first_choice else False,
+                    prompt=not first_choice,
+                )
+                first_choice = False
+                if chosen is None:
+                    print("⚠️ Cancelled")
+                    return False
+
+                artist = parsed.artist
+                title = parsed.title
+                if not artist or not title:
+                    share_artist, share_title = artist_title_from_share_name(
+                        chosen.basename
+                    )
+                    artist = artist or share_artist
+                    title = title or share_title
+
+                print(f"⬇️ Downloading {chosen.basename} from {chosen.username}...")
+                print("ℹ️ The peer may queue this for a few minutes before bytes start")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                downloaded = client.download_hit(
+                    chosen,
+                    query=parsed.text,
+                    output_dir=temp_dir,
+                )
+                if downloaded:
+                    track_url = chosen.direct_link() or (
+                        f"{chosen.username} :: {chosen.filename}"
+                    )
+                    return self.import_soulseek(
+                        downloaded,
+                        artist=artist,
+                        title=title,
+                        target_format=tm_audio.resolve_format(format),
+                        track_url=track_url,
+                        duration_seconds=(
+                            float(chosen.length)
+                            if chosen.length is not None
+                            else parsed.duration_s
+                        ),
+                    )
+
+                failure = getattr(client, "last_failure", "") or ""
+                others = [hit for hit in remaining if hit.username != chosen.username]
+                if is_handshake_failure(failure) and others:
+                    print(
+                        f"⚠️ Handshake with {chosen.username} failed",
+                        file=sys.stderr,
+                    )
+                    remaining = others
+                    continue
+                if is_handshake_failure(failure):
+                    print("ℹ️ No other Soulseek results")
+                return False
+            return False
+        except Exception as e:
+            print(f"⚠️ Soulseek error: {e}", file=sys.stderr)
+            return False
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def import_soulseek(
+        self,
+        downloaded: Path,
+        *,
+        artist: Optional[str],
+        title: Optional[str],
+        target_format: str,
+        track_url: str = "",
+        duration_seconds: Optional[float] = None,
+    ) -> bool:
+        """Probe, tag, and place a file already fetched from Soulseek."""
+        probed = tm_audio.probe_audio(downloaded)
+        original_format = probed.get("codec")
+        original_bitrate = probed.get("bitrate_kbps")
+        actual = probed.get("duration_seconds")
+        if isinstance(actual, (int, float)):
+            duration = float(actual)
+        else:
+            duration = duration_seconds
+
+        doc = self._build_soulseek_doc(
+            artist=artist or "Unknown",
+            title=title or downloaded.stem,
+            isrc=None,
+            spotify_metadata=None,
+            track_url=track_url,
+            playlist_url=None,
+            original_format=original_format,
+            original_bitrate=original_bitrate,
+            duration_seconds=duration,
+        )
+        final_path = self._finalize_download(downloaded, doc, target_format)
+        if final_path is None:
+            print("❌ Soulseek post-processing failed", file=sys.stderr)
+            return False
+
+        print(
+            f"✅ Downloaded Soulseek ({original_format or 'unknown'}"
+            f"{f' {original_bitrate}k' if original_bitrate else ''})"
+            f" → {final_path.suffix.upper()[1:]}: {final_path}"
+        )
+        print()
+        return True
+
     # ------------------------------------------------------------------
     # Metadata document builders
     # ------------------------------------------------------------------

@@ -125,6 +125,100 @@ def download(url: str, format: str, output: Optional[str], dumb: bool, no_cache:
         sys.exit(1)
 
 
+@cli.command()
+@click.argument("query")
+@click.option(
+    "--format",
+    "-f",
+    type=click.Choice(["auto", "aiff", "m4a", "mp3"]),
+    default="auto",
+    help="Output format. 'auto' resolves to AIFF (gear-compatible default). "
+    "Pass aiff/m4a/mp3 to override.",
+)
+@click.option(
+    "--output", "-o", type=click.Path(), help="Output directory (overrides config)"
+)
+@click.option(
+    "--duration",
+    "-d",
+    type=float,
+    help="Expected length in seconds. Close matches are listed first; nothing is dropped for length",
+)
+@click.option(
+    "--limit",
+    "-n",
+    type=click.IntRange(1, 100),
+    default=20,
+    show_default=True,
+    help="How many results to show",
+)
+@click.option(
+    "--pick",
+    "-p",
+    type=click.IntRange(1, 100),
+    help="Download shown result number N without prompting",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Download the top-ranked result without prompting",
+)
+def seek(
+    query: str,
+    format: str,
+    output: Optional[str],
+    duration: Optional[float],
+    limit: int,
+    pick: Optional[int],
+    yes: bool,
+):
+    """Search Soulseek and download one result.
+
+    QUERY is "Artist - Title", a sockseek keyed string (artist=…, title=…),
+    or free text like a Soulseek search box. Lossless files rank first;
+    other formats stay in the list. The chosen file is converted and tagged
+    like any other download. If that peer does not answer the handshake,
+    the other results are listed.
+
+    Requires soulseek.username, soulseek.password, and sockseek on PATH.
+
+    \b
+    Examples:
+      tm seek "Burial - Archangel"
+      tm seek "Burial Archangel" --yes
+      tm seek "artist=Autechre, title=bladelores" --duration 203 --pick 1
+    """
+    if yes and pick is not None:
+        raise click.UsageError("Pass either --yes or --pick, not both")
+
+    config = Config()
+    output_dir = Path(output) if output else config.output_dir
+    downloader = Downloader(config, output_dir)
+
+    try:
+        ok = downloader.seek(
+            query,
+            format,
+            duration_s=duration,
+            limit=limit,
+            pick=pick,
+            auto=yes,
+        )
+    except KeyboardInterrupt:
+        click.echo("\n⚠️ Cancelled")
+        sys.exit(1)
+    except ValueError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+    if not ok:
+        sys.exit(1)
+
+
 @cli.command("retry-failed")
 @click.option(
     "--log",
